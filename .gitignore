@@ -1,0 +1,39 @@
+# ===== Environment files (secrets — never commit) =====
+delpossibilities-gas/.env
+delpossibilities-gas/.env.backup
+delpossibilities-gas/.env.production
+delpossibilities-gas-frontend/.env
+delpossibilities-gas-frontend/.env.local
+delpossibilities-gas-frontend/.env.production
+
+# ===== Laravel backend =====
+delpossibilities-gas/vendor/
+delpossibilities-gas/node_modules/
+delpossibilities-gas/public/hot
+delpossibilities-gas/public/storage
+delpossibilities-gas/storage/*.key
+delpossibilities-gas/storage/app/public/*
+!delpossibilities-gas/storage/app/public/.gitkeep
+delpossibilities-gas/storage/framework/cache/*
+!delpossibilities-gas/storage/framework/cache/.gitkeep
+delpossibilities-gas/storage/framework/sessions/*
+!delpossibilities-gas/storage/framework/sessions/.gitkeep
+delpossibilities-gas/storage/framework/views/*
+!delpossibilities-gas/storage/framework/views/.gitkeep
+delpossibilities-gas/storage/logs/*.log
+delpossibilities-gas/bootstrap/cache/*.php
+!delpossibilities-gas/bootstrap/cache/.gitkeep
+
+# ===== React frontend =====
+delpossibilities-gas-frontend/node_modules/
+delpossibilities-gas-frontend/dist/
+delpossibilities-gas-frontend/dist-ssr/
+delpossibilities-gas-frontend/*.local
+
+# ===== OS / editor junk =====
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+config.bat
+node_modules

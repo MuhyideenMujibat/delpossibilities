@@ -1,0 +1,66 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-navy: #0b1e33;
+  --color-brand-teal: #1b6ca8;
+  --color-brand-accent: #8a9a5b;
+  --color-brand-bg: #f7f8fa;
+  --font-heading: 'Poppins', 'system-ui', sans-serif;
+  --font-body: 'Open Sans', 'system-ui', sans-serif;
+}
+
+body {
+  @apply bg-brand-bg text-slate-800 antialiased font-body;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  @apply font-heading;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-slate-100 bg-white p-6 shadow-sm sm:p-8;
+  }
+
+  .label-text {
+    @apply mb-1.5 block text-sm font-medium text-slate-700;
+  }
+
+  .input-field {
+    @apply w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 transition-colors focus:border-brand-teal focus:outline-none focus:ring-2 focus:ring-brand-teal/30 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-500;
+  }
+
+  .file-input {
+    @apply block w-full cursor-pointer text-sm text-slate-600 file:mr-4 file:cursor-pointer file:rounded-lg file:border-0 file:bg-brand-teal file:px-4 file:py-2 file:text-sm file:font-medium file:text-white file:transition-colors hover:file:bg-brand-teal/90;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center rounded-lg bg-brand-teal px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-brand-teal/90 active:bg-brand-teal/80 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-outline {
+    @apply inline-flex items-center justify-center rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-600 transition-colors hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .alert-error {
+    @apply rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700;
+  }
+
+  .alert-success {
+    @apply rounded-lg border border-green-100 bg-green-50 px-4 py-3 text-sm text-green-700;
+  }
+}

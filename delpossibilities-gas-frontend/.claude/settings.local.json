@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -i -X POST http://127.0.0.1:8000/api/orders -H 'Authorization: Bearer 12|HbXrzaU67snueMWznxwDAXGGGmHDq8JNO7gcT4D054fa8acc' -H 'Content-Type: application/json' -d '{\"kg\":12.5,\"hostel_address\":\"Hostel A, Room 12\"}')",
+      "Bash(curl -s -i -X POST http://127.0.0.1:8000/api/orders -H 'Authorization: Bearer 12|HbXrzaU67snueMWznxwDAXGGGmHDq8JNO7gcT4D054fa8acc' -H 'Origin: http://localhost:5174' -F kg=12.5 -F 'hostel_address=Hostel A, Room 12')",
+      "Bash(where python *)",
+      "Bash(where python3 *)",
+      "Bash(where py *)",
+      "WebSearch",
+      "WebFetch(domain:21st.dev)"
+    ]
+  }
+}
