@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { Upload } from 'lucide-react'
 import { apiFetch, resolveImageUrl } from './api'
 
 function CylinderImageUpload({ token, initialImageUrl = null, description, onUploaded }) {
@@ -7,13 +8,32 @@ function CylinderImageUpload({ token, initialImageUrl = null, description, onUpl
   const [isError, setIsError] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [imageUrl, setImageUrl] = useState(initialImageUrl)
+  const [trackedInitialUrl, setTrackedInitialUrl] = useState(initialImageUrl)
+
+  // Adjust state during render (React's recommended escape hatch) instead of
+  // an effect, so the preview stays in sync when the parent's profile fetch
+  // resolves after this component has already mounted.
+  if (initialImageUrl !== trackedInitialUrl) {
+    setTrackedInitialUrl(initialImageUrl)
+    setImageUrl(initialImageUrl)
+  }
+
+  const selectedPreviewUrl = useMemo(() => (selectedFile ? URL.createObjectURL(selectedFile) : null), [selectedFile])
+  const previewUrl = selectedPreviewUrl || resolveImageUrl(imageUrl)
 
   useEffect(() => {
-    setImageUrl(initialImageUrl)
-  }, [initialImageUrl])
+    return () => {
+      if (selectedPreviewUrl) URL.revokeObjectURL(selectedPreviewUrl)
+    }
+  }, [selectedPreviewUrl])
 
   const handleFileChange = (e) => {
-    setSelectedFile(e.target.files[0])
+    const file = e.target.files[0] || null
+    setSelectedFile(file)
+    if (file) {
+      setIsError(false)
+      setMessage('')
+    }
   }
 
   const handleUpload = async () => {
@@ -60,10 +80,20 @@ function CylinderImageUpload({ token, initialImageUrl = null, description, onUpl
       {description && <p className="mb-4 text-sm text-slate-500">{description}</p>}
 
       <div className="mb-4">
-        {imageUrl ? (
-          <img src={resolveImageUrl(imageUrl)} alt="Cylinder" className="h-40 w-full rounded-xl object-cover" />
+        {previewUrl ? (
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+            <img src={previewUrl} alt="Cylinder preview" className="h-48 w-full object-cover" />
+            {selectedFile && (
+              <div className="flex items-center justify-between px-3 py-2 text-xs text-slate-500">
+                <span className="truncate">Previewing: {selectedFile.name}</span>
+                <button type="button" onClick={() => setSelectedFile(null)} className="font-medium text-brand-teal hover:underline">
+                  Remove
+                </button>
+              </div>
+            )}
+          </div>
         ) : (
-          <div className="flex h-40 w-full items-center justify-center rounded-xl bg-slate-100 text-sm text-slate-400">
+          <div className="flex h-48 w-full items-center justify-center rounded-xl bg-slate-100 text-sm text-slate-400">
             No image
           </div>
         )}
@@ -72,6 +102,7 @@ function CylinderImageUpload({ token, initialImageUrl = null, description, onUpl
       <input type="file" accept="image/*" onChange={handleFileChange} className="file-input" />
 
       <button onClick={handleUpload} disabled={uploading} className="btn-primary mt-4">
+        <Upload className="h-4 w-4" strokeWidth={2} />
         {uploading ? 'Uploading…' : 'Upload'}
       </button>
 

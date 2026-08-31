@@ -22,3 +22,6 @@
 Homestead.json
 Homestead.yaml
 Thumbs.db
+
+# Local DB export for seeding the live database — not for version control
+/local-settings.sql

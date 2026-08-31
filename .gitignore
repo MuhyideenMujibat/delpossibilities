@@ -35,5 +35,3 @@ delpossibilities-gas-frontend/*.local
 Thumbs.db
 .vscode/
 .idea/
-config.bat
-node_modules

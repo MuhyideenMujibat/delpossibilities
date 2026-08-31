@@ -1,5 +1,8 @@
 import { useState, useEffect } from 'react'
+import { UserCircle } from 'lucide-react'
 import { apiFetch } from '../api'
+import PageHeader from '../components/PageHeader'
+import ChangePasswordForm from '../components/ChangePasswordForm'
 
 function AdminProfile({ token }) {
   const [loading, setLoading] = useState(true)
@@ -62,15 +65,15 @@ function AdminProfile({ token }) {
   if (loading) {
     return (
       <div className="mx-auto max-w-md">
-        <h2 className="mb-6 text-2xl font-semibold text-brand-navy">Profile</h2>
-        <p className="text-sm text-slate-500">Loading…</p>
+        <PageHeader title="Profile" subtitle="Manage your admin account." icon={UserCircle} />
+        <div className="skeleton h-56 w-full" />
       </div>
     )
   }
 
   return (
     <div className="mx-auto max-w-md">
-      <h2 className="mb-6 text-2xl font-semibold text-brand-navy">Profile</h2>
+      <PageHeader title="Profile" subtitle="Manage your admin account." icon={UserCircle} />
 
       <div className="card">
         <div className="flex flex-col gap-4">
@@ -103,6 +106,11 @@ function AdminProfile({ token }) {
           {message && <p className="alert-success">{message}</p>}
           {error && <p className="alert-error">{error}</p>}
         </div>
+      </div>
+
+      <div className="card mt-6">
+        <h3 className="mb-4 text-lg font-semibold text-brand-navy">Change Password</h3>
+        <ChangePasswordForm token={token} />
       </div>
     </div>
   )
