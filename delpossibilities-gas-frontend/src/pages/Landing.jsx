@@ -26,7 +26,7 @@ const GAS_SIZES = [
 // instead of Log In / Register, and the "order" CTAs point at the app
 // rather than bouncing through /register.
 function Landing({ token, isAdmin }) {
-  const orderCtaTo = token ? '/' : '/register'
+  const orderCtaTo = token ? '/home' : '/register'
   return (
     <div>
       <TopNav token={token} isAdmin={isAdmin} />
@@ -144,10 +144,10 @@ function Landing({ token, isAdmin }) {
               <span className="mt-3 block text-sm text-white/55">WhatsApp</span>
               <span className="block font-semibold">Message us</span>
             </a>
-            <a href="mailto:hello@delpossibilities.com" className="rounded-xl bg-white/10 p-4 text-white transition-colors hover:bg-white/15">
+            <a href="mailto:delpossibilities@gmail.com" className="rounded-xl bg-white/10 p-4 text-white transition-colors hover:bg-white/15">
               <Mail className="h-5 w-5" strokeWidth={1.8} />
               <span className="mt-3 block text-sm text-white/55">Email</span>
-              <span className="block font-semibold">hello@delpossibilities.com</span>
+              <span className="block font-semibold">delpossibilities@gmail.com</span>
             </a>
           </div>
         </div>

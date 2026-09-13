@@ -93,7 +93,7 @@ function Register({ setToken, setRole, setPermissions }) {
       localStorage.setItem('role', role || '')
       setPermissions(permissions)
       const stored = takePostAuthRedirect()
-      navigate(role === 'admin' || role === 'super_admin' ? '/admin' : from || stored || '/', { replace: true })
+      navigate(role === 'admin' || role === 'super_admin' ? '/admin' : from || stored || '/home', { replace: true })
     } catch {
       setError('Could not reach the server.')
     } finally {
@@ -275,9 +275,10 @@ function Register({ setToken, setRole, setPermissions }) {
         label="Phone"
         icon={Phone}
         type="tel"
+        inputMode="numeric"
         placeholder="080…"
         value={phone}
-        onChange={(e) => setPhone(e.target.value)}
+        onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 11))}
         autoComplete="tel"
         required
       />

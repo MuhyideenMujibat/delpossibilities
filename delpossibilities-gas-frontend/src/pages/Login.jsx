@@ -45,9 +45,9 @@ function Login({ setToken, setRole, setPermissions }) {
       setPermissions(permissions)
       // `from` (router state) wins when present; otherwise fall back to the
       // persisted redirect set by whoever sent us here ("Log in to invest",
-      // "Log In to Order", …), then to Home.
+      // "Log In to Order", …), then to Home ("/home", the order form).
       const stored = takePostAuthRedirect()
-      navigate(role === 'admin' || role === 'super_admin' ? '/admin' : from || stored || '/', { replace: true })
+      navigate(role === 'admin' || role === 'super_admin' ? '/admin' : from || stored || '/home', { replace: true })
     } catch {
       setError('Could not reach the server.')
     } finally {

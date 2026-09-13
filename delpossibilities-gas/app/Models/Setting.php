@@ -15,6 +15,12 @@ class Setting extends Model
         'offer_title',
         'offer_message',
         'offer_price_per_kg',
+        'broadcast_active',
+        'broadcast_message',
+        'broadcast_slot1_pickup',
+        'broadcast_slot1_delivery',
+        'broadcast_slot2_pickup',
+        'broadcast_slot2_delivery',
         'loyalty_enabled',
         'loyalty_threshold_kg',
         'loyalty_discount_percent',
@@ -22,7 +28,7 @@ class Setting extends Model
         'session_ends_at',
         'semester_starts_at',
         'semester_ends_at',
-        'referral_reward_amount',
+        'referral_discount_percent',
         'investment_bank_name',
         'investment_account_name',
         'investment_account_number',
@@ -30,6 +36,8 @@ class Setting extends Model
         'investment_minimum_amount',
         'investment_tenures_months',
         'investment_whatsapp_number',
+        'paystack_enabled',
+        'flutterwave_enabled',
     ];
 
     protected function casts(): array
@@ -40,6 +48,9 @@ class Setting extends Model
             'off_campus_delivery_fee' => 'decimal:2',
             'offer_active' => 'boolean',
             'offer_price_per_kg' => 'decimal:2',
+            'broadcast_active' => 'boolean',
+            'paystack_enabled' => 'boolean',
+            'flutterwave_enabled' => 'boolean',
             'loyalty_enabled' => 'boolean',
             'loyalty_threshold_kg' => 'decimal:2',
             'loyalty_discount_percent' => 'decimal:2',
@@ -47,7 +58,7 @@ class Setting extends Model
             'session_ends_at' => 'date',
             'semester_starts_at' => 'date',
             'semester_ends_at' => 'date',
-            'referral_reward_amount' => 'decimal:2',
+            'referral_discount_percent' => 'decimal:2',
             'investment_monthly_rate_percent' => 'decimal:2',
             'investment_minimum_amount' => 'decimal:2',
         ];
@@ -78,5 +89,12 @@ class Setting extends Model
         return (bool) $this->loyalty_enabled
             && (float) $this->loyalty_threshold_kg > 0
             && (float) $this->loyalty_discount_percent > 0;
+    }
+
+    // Falls back to the referral coupon's built-in default when the admin
+    // hasn't set one, so referrals keep working out of the box.
+    public function referralDiscountPercent(): float
+    {
+        return (float) ($this->referral_discount_percent ?? User::REFERRAL_DISCOUNT_PERCENT);
     }
 }

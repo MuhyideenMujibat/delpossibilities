@@ -1,11 +1,29 @@
 import { useState, useEffect } from 'react'
-import { UserCircle, MapPin, Gift, Copy, Check } from 'lucide-react'
+import { UserCircle, MapPin, Gift, Copy, Check, Crown, Gem } from 'lucide-react'
 import { apiFetch } from '../api'
 import CylinderImageUpload from '../CylinderImageUpload'
 import ChangePasswordForm from '../components/ChangePasswordForm'
 import PageHeader from '../components/PageHeader'
 import HostelSelect from '../HostelSelect'
 import LocationTypeToggle from '../components/LocationTypeToggle'
+
+// Mirrors User::TIER_VIP / TIER_VVIP (see AdminUsers.jsx's MEMBERSHIP_TIERS
+// for the admin-side equivalent). 'none' renders nothing — most students
+// have no tier.
+const MEMBERSHIP_BADGES = {
+  vip: {
+    label: 'VIP Member',
+    icon: Crown,
+    className: 'border-amber-200 bg-amber-50 text-amber-700',
+    description: 'Free delivery on every order — gas refills, Eazy Market, and accessories.',
+  },
+  vvip: {
+    label: 'VVIP Member',
+    icon: Gem,
+    className: 'border-violet-200 bg-violet-50 text-violet-700',
+    description: 'Free delivery on everything, plus the gas cost itself is free on your gas orders. Shop goods are still paid for, just delivered free.',
+  },
+}
 
 function Profile({ token }) {
   const [loading, setLoading] = useState(true)
@@ -16,8 +34,13 @@ function Profile({ token }) {
   const [address, setAddress] = useState('')
   const [phone, setPhone] = useState('')
   const [cylinderImageUrl, setCylinderImageUrl] = useState(null)
-  const [referralBalance, setReferralBalance] = useState(0)
+  // A running PERCENT balance (not a coupon count — see
+  // User::grantReferralReward), earned by referring students who qualify.
+  // Can exceed 100% (e.g. two referrals at 70% each leaves 140%); an order
+  // only ever spends up to 100 points of it, keeping the rest.
+  const [referralPercentAvailable, setReferralPercentAvailable] = useState(0)
   const [customerId, setCustomerId] = useState(null)
+  const [membershipTier, setMembershipTier] = useState('none')
   const [copied, setCopied] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
@@ -41,7 +64,11 @@ function Profile({ token }) {
         else setHostel(data.hostel || '')
         setPhone(data.phone || '')
         setCylinderImageUrl(data.cylinder_image_url || null)
-        setReferralBalance(Number(data.referral_credit_balance || 0))
+        setReferralPercentAvailable(Number(data.referral_discount_percent_available || 0))
+        // Every account carries a customer_id from signup now, so it comes
+        // straight off /user — no separate subscription lookup needed.
+        setCustomerId(data.customer_id || null)
+        setMembershipTier(data.membership_tier || 'none')
       } catch {
         setError('Could not reach the server.')
       } finally {
@@ -49,19 +76,7 @@ function Profile({ token }) {
       }
     }
 
-    const fetchSubscription = async () => {
-      try {
-        const response = await apiFetch('/my-subscription', { token })
-        if (!response.ok) return
-        const data = await response.json().catch(() => null)
-        setCustomerId(data?.customer_id || null)
-      } catch {
-        // Non-essential — the referral card just won't show a Customer ID.
-      }
-    }
-
     fetchUser()
-    fetchSubscription()
   }, [token])
 
   const handleCopyCustomerId = async () => {
@@ -124,6 +139,18 @@ function Profile({ token }) {
   return (
     <div className="mx-auto max-w-3xl">
       <PageHeader title="Profile" subtitle="Manage your account details." icon={UserCircle} />
+
+      {MEMBERSHIP_BADGES[membershipTier] && (() => {
+        const badge = MEMBERSHIP_BADGES[membershipTier]
+        return (
+          <div className={`mb-6 flex items-start gap-2.5 rounded-xl border px-4 py-3 text-sm ${badge.className}`}>
+            <badge.icon className="mt-0.5 h-4 w-4 flex-shrink-0" strokeWidth={2} />
+            <span>
+              <span className="font-semibold">{badge.label}</span> — {badge.description}
+            </span>
+          </div>
+        )
+      })()}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
         <div className="card mb-6 lg:col-span-3 lg:mb-0">
@@ -206,41 +233,57 @@ function Profile({ token }) {
           <ChangePasswordForm token={token} />
         </div>
 
-        {(customerId || referralBalance > 0) && (
+        {(customerId || referralPercentAvailable > 0) && (
           <div className="card lg:col-span-5">
             <div className="flex items-center gap-2 mb-3">
               <Gift className="h-5 w-5 text-brand-teal" strokeWidth={1.8} />
               <h3 className="text-lg font-semibold text-brand-navy">Refer & Earn</h3>
             </div>
 
-            {customerId && (
-              <div className="mb-4">
-                <p className="text-sm text-slate-600 mb-2">
-                  Share your Customer ID with a new student. When they register with it and pay for
-                  their first gas refill or subscription, you earn a delivery-fee credit automatically.
-                </p>
-                <div className="flex items-center gap-2">
-                  <code className="input-field flex-1 font-mono text-sm bg-slate-50">{customerId}</code>
-                  <button
-                    type="button"
-                    onClick={handleCopyCustomerId}
-                    className="btn-outline whitespace-nowrap"
-                  >
-                    {copied ? (
-                      <span className="flex items-center gap-1.5"><Check className="h-4 w-4" strokeWidth={2} /> Copied</span>
-                    ) : (
-                      <span className="flex items-center gap-1.5"><Copy className="h-4 w-4" strokeWidth={1.8} /> Copy</span>
-                    )}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {referralBalance > 0 && (
-              <p className="alert-success">
-                You have &#8358;{referralBalance.toLocaleString()} in referral credit — it's applied
-                automatically as an option at checkout on your next gas refill or Eazy Market order.
+            {membershipTier === 'vvip' ? (
+              <p className="text-sm text-slate-600">
+                VVIP accounts can&apos;t refer other students — since every gas order is already free for you,
+                there&apos;s no referral discount for you to earn or give.
               </p>
+            ) : (
+              <>
+                {customerId && (
+                  <div className="mb-4">
+                    <p className="text-sm text-slate-600 mb-2">
+                      Share your Customer ID with a new student. Once they register with it and either pay for a gas
+                      order of <strong>3&nbsp;kg or more</strong> or take a subscription — whichever happens first —
+                      you get a one-time discount off your next gas order, applied automatically at your checkout.
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <code className="input-field flex-1 font-mono text-sm bg-slate-50">{customerId}</code>
+                      {referralPercentAvailable > 0 && (
+                        <span className="whitespace-nowrap rounded-full bg-brand-teal/10 px-2.5 py-1 text-xs font-semibold text-brand-teal">
+                          {referralPercentAvailable}% available
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={handleCopyCustomerId}
+                        className="btn-outline whitespace-nowrap"
+                      >
+                        {copied ? (
+                          <span className="flex items-center gap-1.5"><Check className="h-4 w-4" strokeWidth={2} /> Copied</span>
+                        ) : (
+                          <span className="flex items-center gap-1.5"><Copy className="h-4 w-4" strokeWidth={1.8} /> Copy</span>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {referralPercentAvailable > 0 && (
+                  <p className="alert-success">
+                    You have <strong>{referralPercentAvailable}% referral discount</strong> available. Up to 100% is
+                    applied to your next gas order automatically at checkout — enough to make it fully free once you
+                    hit that mark; whatever isn&apos;t used stays on your account for later.
+                  </p>
+                )}
+              </>
             )}
           </div>
         )}

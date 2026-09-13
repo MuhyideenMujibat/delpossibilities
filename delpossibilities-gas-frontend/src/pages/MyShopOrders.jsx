@@ -18,6 +18,7 @@ function linkedNote(productOrder) {
   if (productOrder.order) return `Delivered with gas order #${productOrder.order.id}`
   if (productOrder.attaching_order) return `Delivered with gas order #${productOrder.attaching_order.id}`
   if (productOrder.refill) return `Delivered with your subscription refill #${productOrder.refill.id}`
+  if (productOrder.attaching_refill) return `Delivered with your subscription refill #${productOrder.attaching_refill.id}`
   return null
 }
 

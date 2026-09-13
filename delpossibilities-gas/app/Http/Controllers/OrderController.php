@@ -25,7 +25,6 @@ class OrderController extends Controller
             'delivery_zone_id' => ['nullable', 'required_if:location_type,off_campus', 'integer', 'exists:delivery_zones,id'],
             'product_order_id' => ['nullable', 'integer', 'exists:product_orders,id'],
             'attached_product_order_id' => ['nullable', 'integer', 'different:product_order_id', 'exists:product_orders,id'],
-            'use_referral_credit' => ['sometimes', 'boolean'],
         ]);
 
         $user = $request->user();
@@ -72,21 +71,22 @@ class OrderController extends Controller
             }
         }
 
-        $deliveryFee = $validated['location_type'] === 'off_campus'
-            ? (float) $deliveryZone->fee
-            : ($setting->delivery_fee ?? 0);
+        // A VIP/VVIP account or an investor never pays a delivery fee here,
+        // hostel or off-campus (see User::getsFreeGasDelivery — investors
+        // only get this on a gas order, not on Eazy Market/accessory carts,
+        // see ProductOrderController::store for that narrower VIP/VVIP-only
+        // rule).
+        $deliveryFee = $user->getsFreeGasDelivery() ? 0.0 : (
+            $validated['location_type'] === 'off_campus'
+                ? (float) $deliveryZone->fee
+                : ($setting->delivery_fee ?? 0)
+        );
 
-        // Referral credit — earned by referring other students who go on
-        // to pay for a gas order or subscription (see
-        // User::grantReferralRewardIfEligible) — can offset this order's
-        // delivery fee, up to whichever is smaller: the fee itself, or the
-        // student's available balance. Applied and decremented in the same
-        // request; there's no separate confirmation step since this isn't
-        // itself a charge, just a discount.
-        $referralCreditApplied = 0;
-        if ($request->boolean('use_referral_credit') && (float) $user->referral_credit_balance > 0) {
-            $referralCreditApplied = min($deliveryFee, (float) $user->referral_credit_balance);
-        }
+        // VVIP goes further than VIP: the gas cost itself is free too (see
+        // User::getsFreeGas). Nothing left to discount on an already-free
+        // order, so referral/loyalty below are skipped entirely rather than
+        // being computed and spent for zero actual benefit.
+        $gasCostWaived = $user->getsFreeGas();
 
         // An Eazy Market / Gas Services cart (see ProductOrderController) can
         // ride along with this order in TWO independent ways, and a student
@@ -157,7 +157,7 @@ class OrderController extends Controller
         $loyaltyDiscountApplied = false;
         $loyaltyDiscountAmount = null;
 
-        if ($setting->loyaltyActive()) {
+        if (! $gasCostWaived && $setting->loyaltyActive()) {
             $neededToComplete = max((float) $setting->loyalty_threshold_kg - (float) $user->loyalty_progress_kg, 0);
             $discountableKg = max((float) $validated['kg'] - $neededToComplete, 0);
 
@@ -166,6 +166,36 @@ class OrderController extends Controller
                 $loyaltyDiscountApplied = true;
             }
         }
+
+        // Referral discount — spends the student's referral_discount_percent_available
+        // balance (a running PERCENT, not a coupon count — see
+        // User::grantReferralReward: each qualifying referral just adds its
+        // percent straight onto it, so referring 2 people at 70% each
+        // leaves a 140% balance), applied to whatever's still owed on the
+        // gas cost AFTER the loyalty discount above — loyalty goes first,
+        // referral only discounts what's left. A single order can only use
+        // up to 100% of the remaining amount, so at most 100 percentage
+        // points are spent here; anything beyond that (e.g. the other 40%
+        // of that 140% balance) stays on the account for a future order —
+        // see the decrement below, which only spends $referralPercentUsed,
+        // not the whole balance. Earned only by referring someone who then
+        // either pays for a 3 kg+ gas order or takes a subscription — see
+        // User::grantReferralRewardForGasOrder / ::grantReferralRewardForSubscription.
+        $remainingAfterLoyalty = max((float) $validated['kg'] * (float) $pricePerKg - ($loyaltyDiscountAmount ?? 0), 0);
+        $referralDiscountAmount = 0.0;
+        $referralPercentUsed = 0.0;
+        if (! $gasCostWaived && $remainingAfterLoyalty > 0) {
+            $referralPercentAvailable = (float) $user->referral_discount_percent_available;
+
+            if ($referralPercentAvailable > 0) {
+                $referralPercentUsed = min($referralPercentAvailable, 100.0);
+                $referralDiscountAmount = round($remainingAfterLoyalty * ($referralPercentUsed / 100), 2);
+            }
+        }
+
+        // The whole remaining gas cost, wiped out as its own line item —
+        // same pattern as loyalty/referral above, just covering 100% of it.
+        $vvipDiscountAmount = $gasCostWaived ? round((float) $validated['kg'] * (float) $pricePerKg, 2) : 0.0;
 
         $imagePath = $request->hasFile('cylinder_image')
             ? $request->file('cylinder_image')->store('cylinders', 'public')
@@ -178,11 +208,14 @@ class OrderController extends Controller
             'loyalty_discount_applied' => $loyaltyDiscountApplied,
             'loyalty_discount_amount' => $loyaltyDiscountAmount,
             'delivery_fee' => $deliveryFee,
-            'referral_credit_applied' => $referralCreditApplied,
+            'referral_credit_applied' => 0,
+            'referral_discount_amount' => $referralDiscountAmount,
+            'vvip_discount_amount' => $vvipDiscountAmount,
             'product_order_id' => $productOrder?->id,
             'attached_product_order_id' => $attachedProductOrder?->id,
             'total_amount' => round(
-                $validated['kg'] * $pricePerKg - ($loyaltyDiscountAmount ?? 0) + $deliveryFee - $referralCreditApplied + $productOrderTotal, 2
+                max($validated['kg'] * $pricePerKg - ($loyaltyDiscountAmount ?? 0) - $referralDiscountAmount - $vvipDiscountAmount, 0)
+                + $deliveryFee + $productOrderTotal, 2
             ),
             'hostel_address' => $validated['hostel_address'],
             'location_type' => $validated['location_type'],
@@ -190,8 +223,8 @@ class OrderController extends Controller
             'status' => 'pending',
         ]);
 
-        if ($referralCreditApplied > 0) {
-            $user->decrement('referral_credit_balance', $referralCreditApplied);
+        if ($referralPercentUsed > 0) {
+            $user->decrement('referral_discount_percent_available', $referralPercentUsed);
         }
 
         return response()->json($order, 201);
@@ -210,7 +243,7 @@ class OrderController extends Controller
     public function index()
     {
         return response()->json(
-            Order::with('user')->latest()->get()
+            Order::with(['user', 'productOrder.items', 'attachedProductOrder.items'])->latest()->get()
         );
     }
 
@@ -228,7 +261,13 @@ class OrderController extends Controller
             ]);
         }
 
-        if ($order->paystack_reference && $order->payment_authorization_url) {
+        if (! Setting::current()->paystack_enabled) {
+            return response()->json([
+                'message' => 'Paystack is not currently available. Please choose another payment option.',
+            ], 422);
+        }
+
+        if ($order->paystack_reference && $order->payment_authorization_url && $order->payment_gateway === 'paystack') {
             return response()->json([
                 'authorization_url' => $order->payment_authorization_url,
                 'reference' => $order->paystack_reference,
@@ -266,6 +305,7 @@ class OrderController extends Controller
 
         $order->update([
             'paystack_reference' => $reference,
+            'payment_gateway' => 'paystack',
             'payment_authorization_url' => $response->json('data.authorization_url'),
         ]);
 
@@ -337,7 +377,6 @@ class OrderController extends Controller
             $order->update(['status' => 'approved', 'paid_at' => now()]);
             $order->notifyStatusChange();
             $order->applyLoyaltyProgress();
-            $order->sendReceiptEmail();
 
             // A bundled cart that was still `pending` was paid for as part
             // of this exact charge — it never gets its own
@@ -350,7 +389,14 @@ class OrderController extends Controller
                 $order->productOrder->update(['status' => 'approved', 'paid_at' => $order->paid_at]);
             }
 
-            $order->user->grantReferralRewardIfEligible();
+            $order->user->grantReferralRewardForGasOrder((float) $order->kg);
+
+            // Last, deliberately: this talks to an external SMTP server and
+            // can hang or time out (seen in production — a stuck send here
+            // once fatal-errored the whole request past PHP's execution-time
+            // limit), which would silently skip every side effect below it.
+            // Nothing else in this block may depend on the email having sent.
+            $order->sendReceiptEmail();
         } elseif ($paystackStatus === 'success') {
             // Paid, but not the right amount — don't silently approve it.
             Log::warning('Paystack verify amount mismatch', [

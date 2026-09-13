@@ -60,11 +60,11 @@ const HOME_PRIORITY = [
 //      invest" / "Log In to Order" both pass it), then
 //   2. the persisted post-auth redirect (peeked, not consumed — Login's
 //      handler does the actual clearing), then
-//   3. the student home, or the admin home for staff.
+//   3. the student home ("/home", the order form), or the admin home for staff.
 function AuthedRedirect({ isAdmin, adminHome }) {
   const location = useLocation()
   if (isAdmin) return <Navigate to={adminHome} replace />
-  return <Navigate to={location.state?.from || peekPostAuthRedirect() || '/'} replace />
+  return <Navigate to={location.state?.from || peekPostAuthRedirect() || '/home'} replace />
 }
 
 function App() {
@@ -116,15 +116,16 @@ function App() {
   const can = (key) => isSuperAdmin || permissions.includes(key)
 
   const adminHome = HOME_PRIORITY.find(([key]) => can(key))?.[1] || '/admin/profile'
-  // "/" is Home for everyone non-admin (guest or student) — CreateOrder is
-  // guest-viewable now, login is only enforced at the final pay step.
-  const homePath = isAdmin ? adminHome : '/'
+  // "/home" is Home for everyone non-admin (guest or student) — CreateOrder is
+  // guest-viewable now, login is only enforced at the final pay step. "/" is
+  // the public marketing landing page (see the shell opt-out below).
+  const homePath = isAdmin ? adminHome : '/home'
 
   const adminRoute = (permissionKey, element) =>
     !token ? (
       <Navigate to="/login" />
     ) : !isAdmin ? (
-      <Navigate to="/" />
+      <Navigate to="/home" />
     ) : !can(permissionKey) ? (
       <Navigate to={homePath} />
     ) : (
@@ -132,7 +133,7 @@ function App() {
     )
 
   const superAdminRoute = (element) =>
-    !token ? <Navigate to="/login" /> : !isSuperAdmin ? <Navigate to={isAdmin ? homePath : '/'} /> : element
+    !token ? <Navigate to="/login" /> : !isSuperAdmin ? <Navigate to={isAdmin ? homePath : '/home'} /> : element
 
   return (
     <BrowserRouter>
@@ -180,8 +181,9 @@ function AppShell({
   // restructure it worked "bare" for guests only because Sidebar and
   // DashboardTopbar both silently no-op'd without a token; StudentHeader
   // deliberately doesn't do that anymore (guests need it on Home/Shop), so
-  // /home has to opt out of the shell explicitly instead.
-  if (location.pathname === '/home') {
+  // "/" (the marketing landing page) has to opt out of the shell explicitly
+  // instead. The order form lives at "/home" and keeps the app shell.
+  if (location.pathname === '/') {
     return (
       <>
         <Landing token={token} isAdmin={isAdmin} />
@@ -253,13 +255,13 @@ function AppShell({
         </div>
       ) : (
         // Student/guest shell — top header (nav inline on desktop) + bottom
-        // tab bar (mobile only). "/" and "/shop" are reachable without a
+        // tab bar (mobile only). "/home" and "/shop" are reachable without a
         // token; everything else keeps the same login gate as before.
         <div className="flex min-h-screen flex-col bg-brand-bg">
           <StudentHeader token={token} role={role} onLogout={handleLogout} />
           <main className="flex-1 p-4 pb-24 sm:p-6 md:p-10 md:pb-10">
             <Routes>
-              <Route path="/" element={<Home token={token} />} />
+              <Route path="/home" element={<Home token={token} />} />
               <Route path="/shop" element={<Shop token={token} />} />
               <Route
                 path="/login"
@@ -281,8 +283,8 @@ function AppShell({
                   )
                 }
               />
-              <Route path="/forgot-password" element={token ? <Navigate to="/" /> : <ForgotPassword />} />
-              <Route path="/create-order" element={<Navigate to="/" replace />} />
+              <Route path="/forgot-password" element={token ? <Navigate to="/home" /> : <ForgotPassword />} />
+              <Route path="/create-order" element={<Navigate to="/home" replace />} />
               <Route path="/upload-cylinder-image" element={!token ? <Navigate to="/login" /> : <UploadCylinderImage token={token} />} />
               <Route path="/orders" element={!token ? <Navigate to="/login" /> : <MyOrders token={token} />} />
               <Route path="/orders/:id" element={!token ? <Navigate to="/login" /> : <OrderDetail token={token} />} />
@@ -293,7 +295,7 @@ function AppShell({
               <Route path="/my-shop-orders" element={!token ? <Navigate to="/login" /> : <MyShopOrders token={token} />} />
               <Route path="/my-investments" element={<MyInvestments token={token} />} />
               <Route path="/profile" element={!token ? <Navigate to="/login" /> : <Profile token={token} />} />
-              <Route path="*" element={<Navigate to="/" />} />
+              <Route path="*" element={<Navigate to="/home" />} />
             </Routes>
           </main>
           <MobileTabBar />

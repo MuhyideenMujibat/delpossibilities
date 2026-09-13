@@ -34,6 +34,7 @@ class AdminUserController extends Controller
             'hostel' => ['nullable', 'string', 'max:255'],
             'use_default_password' => ['sometimes', 'boolean'],
             'password' => [Rule::requiredIf(! $request->boolean('use_default_password')), 'nullable', 'string', 'min:8'],
+            'membership_tier' => ['sometimes', Rule::in([User::TIER_NONE, User::TIER_VIP, User::TIER_VVIP])],
             'user_type_id' => ['nullable', 'integer', 'exists:user_types,id'],
             'permission_ids' => ['sometimes', 'array'],
             'permission_ids.*' => ['integer', 'exists:permissions,id'],
@@ -48,6 +49,10 @@ class AdminUserController extends Controller
             'phone' => $validated['phone'] ?? null,
             'hostel' => $validated['hostel'] ?? null,
             'role' => $accountType === 'admin' ? 'admin' : 'student',
+            // VIP/VVIP status is a customer perk (see User::getsFreeDelivery
+            // / ::getsFreeGas), so it's ignored for employee accounts
+            // regardless of what the request sends.
+            'membership_tier' => $accountType === 'admin' ? User::TIER_NONE : ($validated['membership_tier'] ?? User::TIER_NONE),
             'user_type_id' => $accountType === 'admin' ? ($validated['user_type_id'] ?? null) : null,
             'email_verified_at' => now(),
         ]);

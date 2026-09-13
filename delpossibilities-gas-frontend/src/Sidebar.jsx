@@ -52,12 +52,12 @@ const ADMIN_LINKS = [
   { to: '/admin/feedback', label: 'Suggestions & Reviews', icon: MessageSquareText, superAdminOnly: true },
 ]
 
-// The brand mark links to /home (the public landing page) from every
+// The brand mark links to "/" (the public marketing landing page) from every
 // header in the app — logged in or out, admin or student.
 function BrandMark({ compact }) {
   if (compact) {
     return (
-      <Link to="/home" className="flex min-w-0 items-center gap-3 px-4 py-3">
+      <Link to="/" className="flex min-w-0 items-center gap-3 px-4 py-3">
         <img src={logo} alt="D'EL-Possibilities logo" className="h-8 w-8 rounded-full object-cover" />
         <span className="truncate font-heading text-sm font-bold text-white">D&apos;EL-POSSIBILITIES</span>
       </Link>
@@ -65,7 +65,7 @@ function BrandMark({ compact }) {
   }
 
   return (
-    <Link to="/home" className="block min-w-0 px-5 pb-6 pt-7">
+    <Link to="/" className="block min-w-0 px-5 pb-6 pt-7">
       <div className="flex min-w-0 items-center gap-2.5">
         <img src={logo} alt="D'EL-Possibilities logo" className="h-10 w-10 flex-shrink-0 rounded-full object-cover ring-2 ring-white/15" />
         <p className="min-w-0 truncate font-heading text-sm font-black uppercase tracking-tight text-white">D&apos;EL-Possibilities</p>

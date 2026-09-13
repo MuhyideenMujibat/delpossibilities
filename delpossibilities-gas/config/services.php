@@ -41,6 +41,17 @@ return [
         'callback_url' => env('FRONTEND_PAYMENT_CALLBACK_URL', 'http://localhost:5173/payment/callback'),
     ],
 
+    'flutterwave' => [
+        'secret_key' => env('FLUTTERWAVE_SECRET_KEY'),
+        'public_key' => env('FLUTTERWAVE_PUBLIC_KEY'),
+        // Compared directly against the `verif-hash` header on incoming
+        // webhooks (Flutterwave doesn't HMAC-sign like Paystack — it just
+        // echoes back a secret hash you set in their dashboard). Must match
+        // that dashboard value exactly.
+        'webhook_hash' => env('FLUTTERWAVE_WEBHOOK_HASH'),
+        'callback_url' => env('FRONTEND_PAYMENT_CALLBACK_URL', 'http://localhost:5173/payment/callback'),
+    ],
+
     'frontend' => [
         'url' => env('FRONTEND_URL', 'http://localhost:5173'),
     ],

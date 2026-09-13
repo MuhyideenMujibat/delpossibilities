@@ -10,6 +10,7 @@ class SubscriptionPayment extends Model
         'subscriber_id',
         'amount',
         'paystack_reference',
+        'flutterwave_tx_ref',
         'payment_authorization_url',
         'method',
         'paid_at',

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { UserPlus, User, Mail, Home, Phone, GraduationCap, Briefcase } from 'lucide-react'
+import { UserPlus, User, Mail, Home, Phone, GraduationCap, Briefcase, Crown, Gem } from 'lucide-react'
 import { apiFetch } from '../api'
 import PageHeader from '../components/PageHeader'
 import PasswordInput from '../components/PasswordInput'
@@ -8,9 +8,30 @@ const DEFAULT_PASSWORD = '123456789'
 
 const EMPTY_FORM = { name: '', email: '', phone: '', hostel: '', password: '' }
 
+// Mirrors User::TIER_NONE / TIER_VIP / TIER_VVIP. VIP: free delivery only.
+// VVIP: free delivery AND the gas cost itself is free — shop goods are
+// still paid for either way, just delivered free (see
+// OrderController::store / ProductOrderController::store).
+const MEMBERSHIP_TIERS = [
+  { value: 'none', label: 'Regular', description: 'No delivery perks — standard pricing on everything.' },
+  {
+    value: 'vip',
+    label: 'VIP',
+    icon: Crown,
+    description: 'Free delivery on every order — gas refills, Eazy Market, and accessories. Goods/gas are still paid for.',
+  },
+  {
+    value: 'vvip',
+    label: 'VVIP',
+    icon: Gem,
+    description: 'Everything VIP gets, plus the gas cost itself is free on gas orders. Shop goods are still paid for, just delivered free.',
+  },
+]
+
 function AdminUsers({ token, isSuperAdmin }) {
   const [accountType, setAccountType] = useState('student')
   const [form, setForm] = useState(EMPTY_FORM)
+  const [membershipTier, setMembershipTier] = useState('none')
   const [useDefaultPassword, setUseDefaultPassword] = useState(false)
   const [userTypes, setUserTypes] = useState([])
   const [permissions, setPermissions] = useState([])
@@ -64,6 +85,7 @@ function AdminUsers({ token, isSuperAdmin }) {
           hostel: isEmployee ? null : form.hostel || null,
           use_default_password: useDefaultPassword,
           password: useDefaultPassword ? undefined : form.password,
+          membership_tier: isEmployee ? undefined : membershipTier,
           user_type_id: isEmployee ? userTypeId || null : undefined,
           permission_ids: isEmployee ? selectedPermissionIds : undefined,
         },
@@ -85,6 +107,7 @@ function AdminUsers({ token, isSuperAdmin }) {
       })
       setForm(EMPTY_FORM)
       setUseDefaultPassword(false)
+      setMembershipTier('none')
       setUserTypeId('')
       setSelectedPermissionIds([])
     } catch {
@@ -196,6 +219,37 @@ function AdminUsers({ token, isSuperAdmin }) {
               </div>
             )}
           </div>
+
+          {!isEmployee && (
+            <div>
+              <label className="label-text">Membership tier</label>
+              <div className="flex flex-col gap-2">
+                {MEMBERSHIP_TIERS.map((tier) => (
+                  <label
+                    key={tier.value}
+                    className={`flex cursor-pointer items-start gap-2.5 rounded-xl px-3.5 py-3 text-sm transition-colors ${
+                      membershipTier === tier.value ? 'bg-brand-teal/5 ring-1 ring-brand-teal' : 'bg-brand-bg'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="membership-tier"
+                      checked={membershipTier === tier.value}
+                      onChange={() => setMembershipTier(tier.value)}
+                      className="mt-0.5 h-4 w-4 flex-shrink-0 accent-brand-teal"
+                    />
+                    <span className="text-slate-600">
+                      <span className="flex items-center gap-1.5 font-medium text-brand-navy">
+                        {tier.icon && <tier.icon className="h-4 w-4" strokeWidth={2} />}
+                        {tier.label}
+                      </span>
+                      {tier.description}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
 
           {isEmployee && (
             <>

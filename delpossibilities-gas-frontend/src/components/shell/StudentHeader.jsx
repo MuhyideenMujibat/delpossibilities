@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link, NavLink } from 'react-router-dom'
-import { ShoppingCart } from 'lucide-react'
+import { ShoppingCart, Truck } from 'lucide-react'
 import { apiFetch, formatNaira } from '../../api'
 import HeaderUserMenu from '../../HeaderUserMenu'
 import NotificationBell from '../../NotificationBell'
@@ -22,6 +22,7 @@ function todayLabel() {
 function StudentHeader({ token, role, onLogout }) {
   const [price, setPrice] = useState(null)
   const [deliveryFeeHostel, setDeliveryFeeHostel] = useState(null)
+  const [announcement, setAnnouncement] = useState(null)
   const cart = useCart()
   const { user } = useCurrentUser()
 
@@ -34,6 +35,10 @@ function StudentHeader({ token, role, onLogout }) {
         if (cancelled || !data) return
         if (data.price_per_kg !== undefined && data.price_per_kg !== null) setPrice(Number(data.price_per_kg))
         if (data.delivery_fee !== undefined && data.delivery_fee !== null) setDeliveryFeeHostel(Number(data.delivery_fee))
+        // Admin-set pickup/delivery time announcement (Settings page) — a
+        // plain message, re-fetched with everything else on this same
+        // /price call rather than a dedicated endpoint.
+        setAnnouncement(data.broadcast_active && data.broadcast_message ? data.broadcast_message : null)
       })
       .catch(() => {})
 
@@ -49,7 +54,7 @@ function StudentHeader({ token, role, onLogout }) {
     <header className="sticky top-0 z-30 flex-shrink-0 border-b border-slate-100 bg-white/85 backdrop-blur">
       <div className="flex h-[52px] items-center justify-between px-4 sm:px-6 md:px-10">
         <div className="flex items-center gap-3">
-          <Link to="/home" className="flex items-center gap-2">
+          <Link to="/" className="flex items-center gap-2">
             <img src={logo} alt="D'EL-Possibilities logo" className="h-7 w-7 rounded-full object-cover" />
             <span className="hidden font-heading text-sm font-bold text-brand-navy lg:inline">D&apos;EL-POSSIBILITIES</span>
           </Link>
@@ -111,6 +116,28 @@ function StudentHeader({ token, role, onLogout }) {
           )}
         </div>
       </div>
+
+      {/* Admin-set pickup/delivery announcement (Settings page) — logged-in
+          students only, looping right-to-left for as long as it's on. A
+          fresh key on the message text restarts the loop cleanly whenever
+          the admin changes it mid-session instead of jumping partway in. */}
+      {token && announcement && (
+        <div className="flex items-center gap-2 overflow-hidden border-t border-brand-ember/20 bg-brand-ember/10 px-4 py-1.5 sm:px-6 md:px-10">
+          <Truck className="h-3.5 w-3.5 flex-shrink-0 text-brand-ember" strokeWidth={2} aria-hidden="true" />
+          <div className="flex-1 overflow-hidden">
+            <p
+              key={announcement}
+              className="whitespace-nowrap text-xs font-medium text-brand-ember"
+              style={{
+                display: 'inline-block',
+                animation: `ticker-scroll ${Math.min(40, Math.max(14, announcement.length * 0.18))}s linear infinite`,
+              }}
+            >
+              {announcement}
+            </p>
+          </div>
+        </div>
+      )}
     </header>
   )
 }

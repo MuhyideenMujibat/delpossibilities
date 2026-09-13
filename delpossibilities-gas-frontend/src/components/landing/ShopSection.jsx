@@ -52,7 +52,9 @@ function ProductCard({ product }) {
         </div>
       )}
 
-      <p className="truncate font-medium text-brand-navy">{product.name}</p>
+      {/* Full name, wrapped — never clipped — so the product is identifiable
+          on both the shop page grid and inside the narrower AddToDeliveryModal. */}
+      <p className="break-words font-medium leading-snug text-brand-navy">{product.name}</p>
 
       {hasVariants ? (
         <select

@@ -29,7 +29,7 @@ function Hero({ orderCtaTo = '/register' }) {
             as="h1"
             className="mt-4 font-heading text-4xl font-bold leading-tight text-white sm:text-5xl lg:text-6xl"
           >
-            Get Your Cooking Gas Delivered Without Leaving Your Hostel.
+            Get Your Cooking Gas Refilled And Delivered Without Leaving Your Hostel.
           </RevealItem>
 
           <RevealItem as="p" className="mx-auto mt-5 max-w-xl text-lg leading-relaxed text-white/70 sm:text-xl lg:mx-0">

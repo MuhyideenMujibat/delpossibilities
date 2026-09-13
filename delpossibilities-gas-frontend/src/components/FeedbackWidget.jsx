@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { motion, AnimatePresence } from 'motion/react'
+import { useState, useRef, useEffect } from 'react'
+import { motion, AnimatePresence, useMotionValue } from 'motion/react'
 import { Megaphone, X, Star, CheckCircle2 } from 'lucide-react'
 import { apiFetch } from '../api'
 
@@ -7,6 +7,11 @@ const TYPES = [
   { value: 'suggestion', label: 'Suggestion' },
   { value: 'review', label: 'Review' },
 ]
+
+// Remembers where the user dragged the button, per browser/device — so it
+// doesn't snap back to the default corner (and, before this, sit on top of
+// the mobile bottom tab bar's "You" link) on every visit.
+const POSITION_STORAGE_KEY = 'delpossibilities:feedbackWidgetOffset'
 
 const PLACEHOLDERS = {
   suggestion: "What should we add or improve?",
@@ -48,6 +53,71 @@ function FeedbackWidget({ token }) {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [submitted, setSubmitted] = useState(false)
+  const [panelStyle, setPanelStyle] = useState(null)
+
+  const buttonRef = useRef(null)
+  const boundsRef = useRef(null)
+  const draggedRef = useRef(false)
+  const x = useMotionValue(0)
+  const y = useMotionValue(0)
+
+  // Restore a previously-dragged position on mount. Left at (0, 0) — the
+  // button's default bottom-24/right-5 (mobile) or bottom-5/right-5
+  // (desktop) spot — for a first-time visitor.
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(POSITION_STORAGE_KEY) || 'null')
+      if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
+        x.set(saved.x)
+        y.set(saved.y)
+      }
+    } catch {
+      // Storage unavailable/corrupt — keep the default position.
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Popup opens relative to wherever the button currently sits (it may have
+  // been dragged anywhere on screen), flipping above/below and clamping
+  // horizontally so it always stays fully on-screen.
+  const positionPanel = () => {
+    const rect = buttonRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const margin = 12
+    const panelWidth = Math.min(352, window.innerWidth - margin * 2)
+    const left = Math.max(margin, Math.min(rect.right - panelWidth, window.innerWidth - panelWidth - margin))
+    const spaceAbove = rect.top - margin
+    const spaceBelow = window.innerHeight - rect.bottom - margin
+    const openUpward = spaceAbove >= 320 || spaceAbove >= spaceBelow
+
+    setPanelStyle(
+      openUpward
+        ? { left, width: panelWidth, bottom: window.innerHeight - rect.top + margin, maxHeight: spaceAbove }
+        : { left, width: panelWidth, top: rect.bottom + margin, maxHeight: spaceBelow }
+    )
+  }
+
+  useEffect(() => {
+    if (!open) return
+    const handle = () => positionPanel()
+    window.addEventListener('resize', handle)
+    return () => window.removeEventListener('resize', handle)
+  }, [open])
+
+  const toggleOpen = () => {
+    // A drag ends with the same pointer-up that would otherwise register as
+    // a tap — swallow exactly one of those so dragging the button never
+    // also pops the form open.
+    if (draggedRef.current) {
+      draggedRef.current = false
+      return
+    }
+    setOpen((prev) => {
+      const next = !prev
+      if (next) positionPanel()
+      return next
+    })
+  }
 
   const resetAndClose = () => {
     setOpen(false)
@@ -95,25 +165,54 @@ function FeedbackWidget({ token }) {
 
   return (
     <>
+      {/* Invisible drag boundary, inset from the viewport edges so the
+          button can never be dragged fully off-screen or under the phone's
+          system gesture bars. */}
+      <div ref={boundsRef} className="pointer-events-none fixed inset-4 z-40" aria-hidden="true" />
+
       <motion.button
+        ref={buttonRef}
         type="button"
-        onClick={() => setOpen((prev) => !prev)}
-        aria-label={open ? 'Close feedback form' : 'Suggest something or leave a review'}
-        animate={open ? { y: 0 } : { y: [0, -10, 0] }}
-        transition={open ? { duration: 0.2 } : { duration: 0.9, repeat: Infinity, repeatDelay: 3, ease: 'easeInOut' }}
-        className="fixed bottom-5 right-5 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-brand-teal text-white shadow-lg shadow-brand-teal/40 transition-colors hover:bg-brand-teal/90"
+        drag
+        dragConstraints={boundsRef}
+        dragMomentum={false}
+        dragElastic={0}
+        onDragStart={() => {
+          draggedRef.current = true
+        }}
+        onDrag={() => {
+          if (open) positionPanel()
+        }}
+        onDragEnd={() => {
+          try {
+            localStorage.setItem(POSITION_STORAGE_KEY, JSON.stringify({ x: x.get(), y: y.get() }))
+          } catch {
+            // Storage unavailable — the position just won't persist across visits.
+          }
+        }}
+        onTap={toggleOpen}
+        style={{ x, y }}
+        aria-label={open ? 'Close feedback form' : 'Suggest something or leave a review — drag to move'}
+        className="fixed bottom-24 right-5 z-50 flex h-14 w-14 touch-none items-center justify-center rounded-full bg-brand-teal text-white shadow-lg shadow-brand-teal/40 transition-colors hover:bg-brand-teal/90 md:bottom-5"
       >
-        {open ? <X className="h-6 w-6" strokeWidth={2} /> : <Megaphone className="h-6 w-6" strokeWidth={2} />}
+        <motion.span
+          animate={open ? {} : { y: [0, -8, 0] }}
+          transition={{ duration: 0.9, repeat: open ? 0 : Infinity, repeatDelay: 3, ease: 'easeInOut' }}
+          className="flex items-center justify-center"
+        >
+          {open ? <X className="h-6 w-6" strokeWidth={2} /> : <Megaphone className="h-6 w-6" strokeWidth={2} />}
+        </motion.span>
       </motion.button>
 
       <AnimatePresence>
-        {open && (
+        {open && panelStyle && (
           <motion.div
-            initial={{ opacity: 0, y: 16, scale: 0.96 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 16, scale: 0.96 }}
+            initial={{ opacity: 0, scale: 0.96 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.96 }}
             transition={{ duration: 0.18 }}
-            className="fixed bottom-24 right-5 z-50 w-[min(22rem,calc(100vw-2.5rem))] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
+            style={{ position: 'fixed', ...panelStyle }}
+            className="z-50 overflow-y-auto overflow-x-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
           >
             <div className="flex items-center justify-between bg-brand-navy px-4 py-3">
               <div>

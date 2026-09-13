@@ -89,7 +89,6 @@ private function handleOrderPayment(string $reference, int $amountPaidInKobo)
         ]);
         $order->notifyStatusChange();
         $order->applyLoyaltyProgress();
-        $order->sendReceiptEmail();
 
         // A bundled cart that was still pending rides on this same charge —
         // mark it paid too, since it never gets its own reference/webhook
@@ -99,7 +98,14 @@ private function handleOrderPayment(string $reference, int $amountPaidInKobo)
             $order->productOrder->update(['status' => 'approved', 'paid_at' => $order->paid_at]);
         }
 
-        $order->user->grantReferralRewardIfEligible();
+        $order->user->grantReferralRewardForGasOrder((float) $order->kg);
+
+        // Last, deliberately: this talks to an external SMTP server and can
+        // hang or time out (seen in production — a stuck send here once
+        // fatal-errored the whole request past PHP's execution-time limit),
+        // which would silently skip every side effect above it. Nothing
+        // above may depend on the email having sent.
+        $order->sendReceiptEmail();
     }
 
     return response()->json(['status' => 'success']);

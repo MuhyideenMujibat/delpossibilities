@@ -124,3 +124,16 @@ h4 {
     @apply flex flex-col items-center gap-3 rounded-xl border border-slate-200 bg-white px-6 py-14 text-center shadow-sm shadow-slate-200/50;
   }
 }
+
+/* Admin-set pickup/delivery announcement strip (StudentHeader) — a single
+   copy of the message scrolls right-to-left, looping. Kept as plain CSS
+   (not a Tailwind utility) since the loop duration is set inline per
+   message length. Respects prefers-reduced-motion via the global rule above. */
+@keyframes ticker-scroll {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(-100%);
+  }
+}

@@ -1,4 +1,4 @@
-import { X, Mail, Phone, MapPin, Home, MessageCircle } from 'lucide-react'
+import { X, Mail, Phone, MapPin, Home, MessageCircle, ShoppingBag } from 'lucide-react'
 import { resolveImageUrl, formatNaira, formatDate, STATUS_LABELS, whatsappUrl } from '../api'
 import StatusBadge from '../StatusBadge'
 import OrderTimeline from './OrderTimeline'
@@ -12,6 +12,11 @@ function AdminOrderDrawer({ order, onClose, onAdvance, updating, nextStatus }) {
   if (!order) return null
 
   const imageSrc = resolveImageUrl(order.cylinder_image_url)
+  // A cart riding on this same delivery: `product_order` was bundled into
+  // this order's own payment; `attached_product_order` was paid separately
+  // and tagged to this trip for fulfilment.
+  const bundledCart = order.product_order
+  const attachedCart = order.attached_product_order
   const chatUrl = whatsappUrl(order.user?.phone, `Hello ${order.user?.name || ''}, this is D'EL-Possibilities about your gas refill order #${order.id}.`)
 
   return (
@@ -36,9 +41,17 @@ function AdminOrderDrawer({ order, onClose, onAdvance, updating, nextStatus }) {
             </div>
           )}
 
-          <div className="mb-5 flex items-center justify-between">
+          <div className="mb-5 flex items-center justify-between gap-2">
             <span className="eyebrow">Status</span>
-            <StatusBadge status={order.status} label={STATUS_LABELS[order.status] || order.status} />
+            <div className="flex items-center gap-1.5">
+              {(bundledCart || attachedCart) && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-brand-accent/15 px-2 py-0.5 text-[10px] font-semibold text-brand-accent">
+                  <ShoppingBag className="h-3 w-3" strokeWidth={2} />
+                  {bundledCart ? 'Shop bundled' : 'Shop attached'}
+                </span>
+              )}
+              <StatusBadge status={order.status} label={STATUS_LABELS[order.status] || order.status} />
+            </div>
           </div>
 
           <OrderTimeline status={order.status} className="mb-6" />
@@ -125,6 +138,36 @@ function AdminOrderDrawer({ order, onClose, onAdvance, updating, nextStatus }) {
               )}
             </div>
           </div>
+
+          {(bundledCart || attachedCart) && (
+            <div className="mt-6 rounded-xl border border-brand-accent/30 bg-brand-accent/5 p-4">
+              <h4 className="mb-1 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-brand-accent">
+                <ShoppingBag className="h-3.5 w-3.5" strokeWidth={2} />
+                {bundledCart ? 'Shop order bundled with this delivery' : 'Paid shop order attached to this delivery'}
+              </h4>
+              <p className="mb-3 text-xs text-slate-500">
+                {bundledCart
+                  ? 'Paid in the same charge as this refill — deliver together.'
+                  : 'Paid separately; delivered on this trip. Its fulfilment status follows this order.'}
+              </p>
+              <div className="flex flex-col gap-1.5 text-sm">
+                {(bundledCart || attachedCart).items?.map((item) => (
+                  <div key={item.id} className="flex items-center justify-between gap-3">
+                    <span className="text-slate-700">
+                      {item.product_name}
+                      {item.variant_label ? ` · ${item.variant_label}` : ''}
+                      <span className="text-slate-400"> ×{item.quantity}</span>
+                    </span>
+                    <span className="figure text-slate-500">{formatNaira(item.line_total)}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-2 flex items-center justify-between border-t border-brand-accent/20 pt-2 text-sm font-medium text-slate-600">
+                <span>Cart total</span>
+                <span className="figure">{formatNaira((bundledCart || attachedCart).total_amount)}</span>
+              </div>
+            </div>
+          )}
         </div>
 
         {(chatUrl || nextStatus) && (

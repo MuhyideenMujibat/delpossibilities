@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { Megaphone, Send, Tag, Gift, Landmark } from 'lucide-react'
+import { Megaphone, Send, Tag, Gift, Landmark, Truck, CreditCard } from 'lucide-react'
 import { apiFetch, formatNaira } from '../api'
 import PageHeader from '../components/PageHeader'
 
@@ -9,23 +9,55 @@ import PageHeader from '../components/PageHeader'
 // Y-m-d portion.
 const toDateInputValue = (value) => (value ? value.slice(0, 10) : '')
 
+// "14:00" -> "2pm", "16:20" -> "4:20pm" — minutes only shown when non-zero,
+// matching how the announcement is meant to read on the student ticker.
+const formatSlotTime = (value) => {
+  if (!value) return ''
+  const [h, m] = value.split(':').map(Number)
+  const period = h >= 12 ? 'pm' : 'am'
+  const h12 = ((h + 11) % 12) + 1
+  return m ? `${h12}:${String(m).padStart(2, '0')}${period}` : `${h12}${period}`
+}
+
+// Builds the sentence shown to students from whichever slots are filled —
+// a slot only counts once both its pickup and delivery time are set, so a
+// half-filled row is silently skipped rather than producing a broken
+// sentence. Returns '' when neither slot is complete, leaving the textarea
+// below for the admin to hand-type instead.
+const composeAnnouncement = (s1p, s1d, s2p, s2d) => {
+  const slots = []
+  if (s1p && s1d) slots.push(`pickup closes at ${formatSlotTime(s1p)} — deliveries run until ${formatSlotTime(s1d)}`)
+  if (s2p && s2d) slots.push(`pickup closes at ${formatSlotTime(s2p)} — deliveries run until ${formatSlotTime(s2d)}`)
+  if (!slots.length) return ''
+  if (slots.length === 1) return `Today's ${slots[0]}.`
+  return `Today's first ${slots[0]}. Second ${slots[1]}.`
+}
+
 function AdminSettings({ token }) {
   const [price, setPrice] = useState(null)
   const [newPrice, setNewPrice] = useState('')
   const [deliveryFee, setDeliveryFee] = useState('')
   const [offCampusDeliveryFee, setOffCampusDeliveryFee] = useState('')
+  const [broadcastActive, setBroadcastActive] = useState(false)
+  const [broadcastText, setBroadcastText] = useState('')
+  const [slot1Pickup, setSlot1Pickup] = useState('')
+  const [slot1Delivery, setSlot1Delivery] = useState('')
+  const [slot2Pickup, setSlot2Pickup] = useState('')
+  const [slot2Delivery, setSlot2Delivery] = useState('')
   const [offerActive, setOfferActive] = useState(false)
   const [offerTitle, setOfferTitle] = useState('')
   const [offerMessage, setOfferMessage] = useState('')
   const [offerPrice, setOfferPrice] = useState('')
+  const [paystackEnabled, setPaystackEnabled] = useState(true)
+  const [flutterwaveEnabled, setFlutterwaveEnabled] = useState(false)
   const [loyaltyEnabled, setLoyaltyEnabled] = useState(false)
   const [loyaltyThresholdKg, setLoyaltyThresholdKg] = useState('')
   const [loyaltyDiscountPercent, setLoyaltyDiscountPercent] = useState('')
+  const [referralDiscountPercent, setReferralDiscountPercent] = useState('')
   const [sessionStartsAt, setSessionStartsAt] = useState('')
   const [sessionEndsAt, setSessionEndsAt] = useState('')
   const [semesterStartsAt, setSemesterStartsAt] = useState('')
   const [semesterEndsAt, setSemesterEndsAt] = useState('')
-  const [referralRewardAmount, setReferralRewardAmount] = useState('')
   const [investmentBankName, setInvestmentBankName] = useState('')
   const [investmentAccountName, setInvestmentAccountName] = useState('')
   const [investmentAccountNumber, setInvestmentAccountNumber] = useState('')
@@ -55,18 +87,26 @@ function AdminSettings({ token }) {
         setNewPrice(currentPrice ?? '')
         setDeliveryFee(data.delivery_fee ?? data.data?.delivery_fee ?? '')
         setOffCampusDeliveryFee(data.off_campus_delivery_fee ?? data.data?.off_campus_delivery_fee ?? '')
+        setBroadcastActive(Boolean(data.broadcast_active))
+        setBroadcastText(data.broadcast_message || '')
+        setSlot1Pickup(data.broadcast_slot1_pickup || '')
+        setSlot1Delivery(data.broadcast_slot1_delivery || '')
+        setSlot2Pickup(data.broadcast_slot2_pickup || '')
+        setSlot2Delivery(data.broadcast_slot2_delivery || '')
         setOfferActive(Boolean(data.offer_active))
         setOfferTitle(data.offer_title || '')
         setOfferMessage(data.offer_message || '')
         setOfferPrice(data.offer_price_per_kg || '')
+        setPaystackEnabled(data.paystack_enabled !== false)
+        setFlutterwaveEnabled(Boolean(data.flutterwave_enabled))
         setLoyaltyEnabled(Boolean(data.loyalty_enabled))
         setLoyaltyThresholdKg(data.loyalty_threshold_kg || '')
         setLoyaltyDiscountPercent(data.loyalty_discount_percent || '')
+        setReferralDiscountPercent(data.referral_discount_percent || '')
         setSessionStartsAt(toDateInputValue(data.session_starts_at))
         setSessionEndsAt(toDateInputValue(data.session_ends_at))
         setSemesterStartsAt(toDateInputValue(data.semester_starts_at))
         setSemesterEndsAt(toDateInputValue(data.semester_ends_at))
-        setReferralRewardAmount(data.referral_reward_amount || '')
         setInvestmentBankName(data.investment_bank_name || '')
         setInvestmentAccountName(data.investment_account_name || '')
         setInvestmentAccountNumber(data.investment_account_number || '')
@@ -94,6 +134,12 @@ function AdminSettings({ token }) {
   const handleSubmit = async () => {
     setError('')
     setMessage('')
+
+    if (!paystackEnabled && !flutterwaveEnabled) {
+      setError('At least one payment gateway must stay enabled.')
+      return
+    }
+
     setSaving(true)
 
     try {
@@ -104,18 +150,26 @@ function AdminSettings({ token }) {
           price_per_kg: newPrice,
           delivery_fee: deliveryFee || 0,
           off_campus_delivery_fee: offCampusDeliveryFee || 0,
+          broadcast_active: broadcastActive,
+          broadcast_message: broadcastText || null,
+          broadcast_slot1_pickup: slot1Pickup || null,
+          broadcast_slot1_delivery: slot1Delivery || null,
+          broadcast_slot2_pickup: slot2Pickup || null,
+          broadcast_slot2_delivery: slot2Delivery || null,
           offer_active: offerActive,
           offer_title: offerTitle,
           offer_message: offerMessage,
           offer_price_per_kg: offerPrice || null,
+          paystack_enabled: paystackEnabled,
+          flutterwave_enabled: flutterwaveEnabled,
           loyalty_enabled: loyaltyEnabled,
           loyalty_threshold_kg: loyaltyThresholdKg || null,
           loyalty_discount_percent: loyaltyDiscountPercent || null,
+          referral_discount_percent: referralDiscountPercent || null,
           session_starts_at: sessionStartsAt || null,
           session_ends_at: sessionEndsAt || null,
           semester_starts_at: semesterStartsAt || null,
           semester_ends_at: semesterEndsAt || null,
-          referral_reward_amount: referralRewardAmount || null,
           investment_bank_name: investmentBankName || null,
           investment_account_name: investmentAccountName || null,
           investment_account_number: investmentAccountNumber || null,
@@ -138,18 +192,26 @@ function AdminSettings({ token }) {
       setNewPrice(updatedPrice)
       setDeliveryFee(data.delivery_fee ?? data.data?.delivery_fee ?? deliveryFee)
       setOffCampusDeliveryFee(data.off_campus_delivery_fee ?? data.data?.off_campus_delivery_fee ?? offCampusDeliveryFee)
+      setBroadcastActive(Boolean(data.broadcast_active))
+      setBroadcastText(data.broadcast_message || '')
+      setSlot1Pickup(data.broadcast_slot1_pickup || '')
+      setSlot1Delivery(data.broadcast_slot1_delivery || '')
+      setSlot2Pickup(data.broadcast_slot2_pickup || '')
+      setSlot2Delivery(data.broadcast_slot2_delivery || '')
       setOfferActive(Boolean(data.offer_active))
       setOfferTitle(data.offer_title || '')
       setOfferMessage(data.offer_message || '')
       setOfferPrice(data.offer_price_per_kg || '')
+      setPaystackEnabled(data.paystack_enabled !== false)
+      setFlutterwaveEnabled(Boolean(data.flutterwave_enabled))
       setLoyaltyEnabled(Boolean(data.loyalty_enabled))
       setLoyaltyThresholdKg(data.loyalty_threshold_kg || '')
       setLoyaltyDiscountPercent(data.loyalty_discount_percent || '')
+      setReferralDiscountPercent(data.referral_discount_percent || '')
       setSessionStartsAt(toDateInputValue(data.session_starts_at))
       setSessionEndsAt(toDateInputValue(data.session_ends_at))
       setSemesterStartsAt(toDateInputValue(data.semester_starts_at))
       setSemesterEndsAt(toDateInputValue(data.semester_ends_at))
-      setReferralRewardAmount(data.referral_reward_amount || '')
       setInvestmentBankName(data.investment_bank_name || '')
       setInvestmentAccountName(data.investment_account_name || '')
       setInvestmentAccountNumber(data.investment_account_number || '')
@@ -196,6 +258,117 @@ function AdminSettings({ token }) {
   return (
     <div className="mx-auto max-w-3xl">
       <PageHeader title="Price Settings" subtitle="Manage pricing, offers, and student announcements." icon={Tag} />
+
+      <div className="card mb-6 border-2 border-brand-teal/30">
+        <span className="flex items-center gap-2 text-sm font-semibold text-brand-navy">
+          <Truck className="h-4 w-4 text-brand-teal" strokeWidth={2} />
+          Pickup &amp; Delivery Announcement
+        </span>
+        <span className="block text-sm text-slate-500">
+          Scrolls as a banner under the header for every logged-in student, on every page — the quickest way to
+          reach everyone when today&apos;s pickup or delivery time changes. Update it as often as you need; turning
+          it off keeps the text saved for next time.
+        </span>
+
+        <label className="mt-4 flex items-start gap-3">
+          <input
+            type="checkbox"
+            checked={broadcastActive}
+            onChange={(e) => setBroadcastActive(e.target.checked)}
+            className="mt-1 h-4 w-4 rounded border-slate-300 text-brand-teal"
+          />
+          <span>
+            <span className="block text-sm font-semibold text-brand-navy">Show this announcement now</span>
+            <span className="block text-sm text-slate-500">Only shown while both this is checked and the message below isn&apos;t empty.</span>
+          </span>
+        </label>
+
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="rounded-lg border border-slate-200 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Slot 1</p>
+            <div className="mt-2 grid grid-cols-2 gap-3">
+              <div>
+                <label className="label-text" htmlFor="slot1-pickup">Pickup closes</label>
+                <input
+                  id="slot1-pickup"
+                  type="time"
+                  value={slot1Pickup}
+                  onChange={(e) => {
+                    const value = e.target.value
+                    setSlot1Pickup(value)
+                    setBroadcastText(composeAnnouncement(value, slot1Delivery, slot2Pickup, slot2Delivery) || broadcastText)
+                  }}
+                  className="input-field"
+                />
+              </div>
+              <div>
+                <label className="label-text" htmlFor="slot1-delivery">Deliveries until</label>
+                <input
+                  id="slot1-delivery"
+                  type="time"
+                  value={slot1Delivery}
+                  onChange={(e) => {
+                    const value = e.target.value
+                    setSlot1Delivery(value)
+                    setBroadcastText(composeAnnouncement(slot1Pickup, value, slot2Pickup, slot2Delivery) || broadcastText)
+                  }}
+                  className="input-field"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-200 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Slot 2 (optional)</p>
+            <div className="mt-2 grid grid-cols-2 gap-3">
+              <div>
+                <label className="label-text" htmlFor="slot2-pickup">Pickup closes</label>
+                <input
+                  id="slot2-pickup"
+                  type="time"
+                  value={slot2Pickup}
+                  onChange={(e) => {
+                    const value = e.target.value
+                    setSlot2Pickup(value)
+                    setBroadcastText(composeAnnouncement(slot1Pickup, slot1Delivery, value, slot2Delivery) || broadcastText)
+                  }}
+                  className="input-field"
+                />
+              </div>
+              <div>
+                <label className="label-text" htmlFor="slot2-delivery">Deliveries until</label>
+                <input
+                  id="slot2-delivery"
+                  type="time"
+                  value={slot2Delivery}
+                  onChange={(e) => {
+                    const value = e.target.value
+                    setSlot2Delivery(value)
+                    setBroadcastText(composeAnnouncement(slot1Pickup, slot1Delivery, slot2Pickup, value) || broadcastText)
+                  }}
+                  className="input-field"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4">
+          <label className="label-text" htmlFor="broadcast-text">Announcement text</label>
+          <textarea
+            id="broadcast-text"
+            rows="2"
+            maxLength={500}
+            placeholder="e.g. Today's pickup closes at 6pm — deliveries run until 8pm."
+            value={broadcastText}
+            onChange={(e) => setBroadcastText(e.target.value)}
+            className="input-field resize-y"
+          />
+          <p className="mt-1 text-xs text-slate-400">
+            {broadcastText.length}/500 — auto-filled from the times above; edit freely for custom wording.
+          </p>
+        </div>
+      </div>
 
       <div className="card">
         {price !== null && (
@@ -301,6 +474,38 @@ function AdminSettings({ token }) {
           </div>
 
           <div className="rounded-xl border border-slate-200 p-4">
+            <span className="flex items-center gap-2 text-sm font-semibold text-brand-navy">
+              <CreditCard className="h-4 w-4 text-brand-teal" strokeWidth={2} />
+              Payment Gateways
+            </span>
+            <span className="block text-sm text-slate-500">
+              At least one must stay enabled. If both are on, students choose which one to pay with at checkout;
+              with only one on, checkout goes straight to it as before.
+            </span>
+
+            <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <label className="flex items-start gap-3 rounded-lg border border-slate-200 p-3">
+                <input
+                  type="checkbox"
+                  checked={paystackEnabled}
+                  onChange={(e) => setPaystackEnabled(e.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border-slate-300 text-brand-teal"
+                />
+                <span className="block text-sm font-semibold text-brand-navy">Enable Paystack</span>
+              </label>
+              <label className="flex items-start gap-3 rounded-lg border border-slate-200 p-3">
+                <input
+                  type="checkbox"
+                  checked={flutterwaveEnabled}
+                  onChange={(e) => setFlutterwaveEnabled(e.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border-slate-300 text-brand-teal"
+                />
+                <span className="block text-sm font-semibold text-brand-navy">Enable Flutterwave</span>
+              </label>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 p-4">
             <label className="flex items-start gap-3">
               <input
                 type="checkbox"
@@ -403,26 +608,32 @@ function AdminSettings({ token }) {
           <div className="rounded-xl border border-slate-200 p-4">
             <span className="flex items-center gap-2 text-sm font-semibold text-brand-navy">
               <Gift className="h-4 w-4 text-brand-teal" strokeWidth={2} />
-              Referral Reward
+              Referral Rewards
             </span>
             <span className="block text-sm text-slate-500">
-              When a student refers a new registrant who uses their Customer ID, and that new student pays for
-              their first gas refill or subscription, the referrer earns this amount as delivery-fee credit —
-              once per referred student.
+              When a new student registers with someone&apos;s Customer ID and that student then either pays for
+              a gas order of <strong>3&nbsp;kg or more</strong> or takes a subscription — whichever happens
+              first — the <strong>referrer</strong> gets one coupon worth the discount below, once per referred
+              student. Coupons stack: a referrer with several can spend them all on one gas order, up to making
+              it fully free, and any left over stay on their account for a future order. The student who used
+              the code gets no discount themselves. Applied automatically at checkout.
             </span>
 
-            <div className="mt-4">
-              <label className="label-text" htmlFor="referral-reward-amount">Reward amount (per referred student)</label>
-              <input
-                id="referral-reward-amount"
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="e.g. 400"
-                value={referralRewardAmount}
-                onChange={(e) => setReferralRewardAmount(e.target.value)}
-                className="input-field"
-              />
+            <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label className="label-text" htmlFor="referral-discount">Referrer's discount (%)</label>
+                <input
+                  id="referral-discount"
+                  type="number"
+                  min="0.01"
+                  max="100"
+                  step="0.01"
+                  placeholder="e.g. 10"
+                  value={referralDiscountPercent}
+                  onChange={(e) => setReferralDiscountPercent(e.target.value)}
+                  className="input-field"
+                />
+              </div>
             </div>
           </div>
 

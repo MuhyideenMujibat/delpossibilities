@@ -64,6 +64,18 @@
           <td class="value" style="color: #8a9a5b;">&minus;&#8358;{{ number_format((float) $order->loyalty_discount_amount, 2) }}</td>
         </tr>
         @endif
+        @if((float) $order->referral_discount_amount > 0)
+        <tr>
+          <td class="label">Referral discount</td>
+          <td class="value" style="color: #8a9a5b;">&minus;&#8358;{{ number_format((float) $order->referral_discount_amount, 2) }}</td>
+        </tr>
+        @endif
+        @if((float) $order->vvip_discount_amount > 0)
+        <tr>
+          <td class="label">VVIP discount</td>
+          <td class="value" style="color: #8a9a5b;">&minus;&#8358;{{ number_format((float) $order->vvip_discount_amount, 2) }}</td>
+        </tr>
+        @endif
         <tr>
           <td class="label">Delivery fee</td>
           <td class="value">&#8358;{{ number_format((float) $order->delivery_fee, 2) }}</td>

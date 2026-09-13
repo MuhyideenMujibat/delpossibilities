@@ -17,6 +17,22 @@ class User extends Authenticatable
     /** @use HasFactory<UserFactory> */
     use HasApiTokens, HasFactory, Notifiable;
 
+    // Default percentage added to a referrer's balance per qualifying
+    // referral (see referral_discount_percent_available) — used only when
+    // the admin hasn't set Setting::referral_discount_percent (see
+    // Setting::referralDiscountPercent).
+    public const REFERRAL_DISCOUNT_PERCENT = 10;
+
+    // The three membership_tier values a student account can hold — 'none'
+    // is the plain default, set by an admin only at account creation (see
+    // AdminUserController::store). 'vip' and 'vvip' are never valid for an
+    // employee/admin account.
+    public const TIER_NONE = 'none';
+
+    public const TIER_VIP = 'vip';
+
+    public const TIER_VVIP = 'vvip';
+
     /**
      * The attributes that are mass assignable.
      *
@@ -27,6 +43,7 @@ class User extends Authenticatable
         'email',
         'password',
         'role',
+        'membership_tier',
         'user_type_id',
         'hostel',
         'location_type',
@@ -35,7 +52,7 @@ class User extends Authenticatable
         'email_verified_at',
         'referred_by_user_id',
         'referral_reward_granted',
-        'referral_credit_balance',
+        'referral_discount_percent_available',
     ];
 
     protected $appends = [
@@ -67,8 +84,32 @@ class User extends Authenticatable
             'password' => 'hashed',
             'loyalty_progress_kg' => 'decimal:2',
             'referral_reward_granted' => 'boolean',
-            'referral_credit_balance' => 'decimal:2',
+            'referral_discount_percent_available' => 'decimal:2',
         ];
+    }
+
+    protected static function booted(): void
+    {
+        // Every account gets a shareable customer/referral code the moment
+        // it's created — no longer tied to subscribing (see Subscriber, which
+        // now reuses this code instead of minting its own). It's just the
+        // account's own id, zero-padded, scoped by signup year:
+        // DEL-2026-0042. Set on `created`, not `creating`, because the id
+        // isn't assigned until the row is inserted.
+        static::created(function (User $user) {
+            if (blank($user->customer_id)) {
+                $user->forceFill([
+                    'customer_id' => static::customerIdFor($user),
+                ])->saveQuietly();
+            }
+        });
+    }
+
+    public static function customerIdFor(User $user): string
+    {
+        $year = $user->created_at?->year ?? now()->year;
+
+        return 'DEL-'.$year.'-'.str_pad((string) $user->id, 4, '0', STR_PAD_LEFT);
     }
 
     public function orders()
@@ -96,25 +137,98 @@ class User extends Authenticatable
         return $this->belongsTo(User::class, 'referred_by_user_id');
     }
 
-    // Called from the two paths that count as a "qualifying purchase" for
-    // referral purposes — Order/PaystackWebhookController's paid-order
-    // side effects, and Subscriber::activate(). A standalone Eazy Market
-    // purchase never calls this. The referral_reward_granted flag (checked
-    // here, not "is this their first order") is what makes this safely
-    // idempotent regardless of which of the two trigger points fires first.
-    public function grantReferralRewardIfEligible(): void
+    // VIP and VVIP both waive the delivery fee on every order type — gas,
+    // Eazy Market, and accessories (see OrderController::store and
+    // ProductOrderController::store). VVIP goes further (see getsFreeGas).
+    public function getsFreeDelivery(): bool
+    {
+        return in_array($this->membership_tier, [self::TIER_VIP, self::TIER_VVIP], true);
+    }
+
+    // VVIP only — the gas cost itself is waived on a gas order, on top of
+    // the free delivery every VIP/VVIP account gets. Shop goods (Eazy
+    // Market/accessories) are still paid for either way, just delivered free.
+    public function getsFreeGas(): bool
+    {
+        return $this->membership_tier === self::TIER_VVIP;
+    }
+
+    // An investor gets free delivery on a GAS order specifically — not the
+    // gas cost itself, and not Eazy Market/accessory delivery (that stays
+    // gated to VIP/VVIP alone, see getsFreeDelivery). Checked only in
+    // OrderController::store.
+    public function getsFreeGasDelivery(): bool
+    {
+        return $this->getsFreeDelivery() || $this->is_investor;
+    }
+
+    // "Investor" = has at least one investment whose contract is actually
+    // signed — a completed investment, not one still pending payment or
+    // awaiting signature (see Investment status flow in InvestmentController).
+    // Not in $appends (so this doesn't run once per row when many users are
+    // serialized at once, e.g. AdminStudentController::index) — the /user
+    // route opts in explicitly via ->append('is_investor').
+    protected function isInvestor(): Attribute
+    {
+        return Attribute::make(
+            get: fn () => $this->investments()->where('status', 'signed')->exists(),
+        );
+    }
+
+    // Called from the paid-gas-order side effects (OrderController::verify and
+    // PaystackWebhookController) — gates the gas-order trigger on 3 kg or
+    // more before handing off to the shared grant below.
+    public function grantReferralRewardForGasOrder(float $orderKg): void
+    {
+        if ($orderKg < 3) {
+            return;
+        }
+
+        $this->grantReferralReward();
+    }
+
+    // Called from the subscription-activation side effects (Subscriber::activate,
+    // reached via both SubscriberController::verifyPayment and
+    // PaystackWebhookController). A subscription isn't measured in kg, so it
+    // counts on its own — no threshold to clear, unlike a plain gas order.
+    public function grantReferralRewardForSubscription(): void
+    {
+        $this->grantReferralReward();
+    }
+
+    // Shared grant: adds Setting::referral_discount_percent (see
+    // Setting::referralDiscountPercent) straight onto the referrer's
+    // running percent balance — once per referred student, whichever
+    // qualifying event (a 3 kg+ gas order, or a subscription) they reach
+    // first. The referral_reward_granted flag on this (the referred) user
+    // keeps it idempotent across both trigger points and any retries.
+    // Eazy Market-only orders don't count toward either trigger. Referring
+    // several students stacks: two referrals at 70% each puts 140% on the
+    // balance — an order only ever spends up to 100% of it (see
+    // OrderController::store), so the other 40% stays on the balance
+    // rather than being thrown away with the "used" coupon it came from.
+    private function grantReferralReward(): void
     {
         if (! $this->referred_by_user_id || $this->referral_reward_granted) {
             return;
         }
 
-        $amount = (float) (Setting::current()->referral_reward_amount ?? 0);
+        $referrer = static::find($this->referred_by_user_id);
 
-        if ($amount <= 0) {
+        // A VVIP referrer never pays for gas in the first place, so a
+        // percent-off-gas coupon is worthless to them — see the
+        // referred_by_customer_id validation in AuthController::register,
+        // which already blocks a VVIP account's Customer ID from being used
+        // as a referral link. This is just defense in depth for the rare
+        // case a referrer is promoted to VVIP after already referring
+        // someone — left ungranted (not marked as spent) so a genuine
+        // future qualifying event can still pay out if they're ever
+        // demoted back off VVIP.
+        if (! $referrer || $referrer->membership_tier === self::TIER_VVIP) {
             return;
         }
 
-        static::where('id', $this->referred_by_user_id)->increment('referral_credit_balance', $amount);
+        $referrer->increment('referral_discount_percent_available', Setting::current()->referralDiscountPercent());
         $this->update(['referral_reward_granted' => true]);
     }
 

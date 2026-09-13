@@ -163,6 +163,12 @@ function MyOrders({ token }) {
                       {order.loyalty_discount_applied && (
                         <span className="ml-1.5 inline-block rounded-full bg-brand-teal/10 px-1.5 py-0.5 text-[10px] font-semibold text-brand-teal">Loyalty</span>
                       )}
+                      {Number(order.referral_discount_amount) > 0 && (
+                        <span className="ml-1.5 inline-block rounded-full bg-brand-teal/10 px-1.5 py-0.5 text-[10px] font-semibold text-brand-teal">Referral</span>
+                      )}
+                      {Number(order.vvip_discount_amount) > 0 && (
+                        <span className="ml-1.5 inline-block rounded-full bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-600">VVIP</span>
+                      )}
                       {(order.product_order || order.attached_product_order) && (
                         <span className="ml-1.5 inline-block rounded-full bg-brand-accent/15 px-1.5 py-0.5 text-[10px] font-semibold text-brand-accent">+ Shop</span>
                       )}
@@ -205,6 +211,12 @@ function MyOrders({ token }) {
                     <span className="figure font-medium">{formatNaira(order.total_amount)}</span>
                     {order.loyalty_discount_applied && (
                       <span className="inline-block rounded-full bg-brand-teal/10 px-1.5 py-0.5 text-[10px] font-semibold text-brand-teal">Loyalty</span>
+                    )}
+                    {Number(order.referral_discount_amount) > 0 && (
+                      <span className="inline-block rounded-full bg-brand-teal/10 px-1.5 py-0.5 text-[10px] font-semibold text-brand-teal">Referral</span>
+                    )}
+                    {Number(order.vvip_discount_amount) > 0 && (
+                      <span className="inline-block rounded-full bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-600">VVIP</span>
                     )}
                     {(order.product_order || order.attached_product_order) && (
                       <span className="inline-block rounded-full bg-brand-accent/15 px-1.5 py-0.5 text-[10px] font-semibold text-brand-accent">+ Shop</span>

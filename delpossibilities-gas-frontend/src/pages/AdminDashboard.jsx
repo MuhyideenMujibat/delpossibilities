@@ -423,7 +423,15 @@ function AdminDashboard({ token, canViewRefills = false }) {
                             />
                           )}
                         </td>
-                        <td className="max-w-[140px] truncate px-4 py-3 font-medium text-brand-navy">{order.user?.name}</td>
+                        <td className="max-w-[150px] px-4 py-3 font-medium text-brand-navy">
+                          <span className="block truncate">{order.user?.name}</span>
+                          {(order.product_order || order.attached_product_order) && (
+                            <span className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-brand-accent/15 px-1.5 py-0.5 text-[10px] font-semibold text-brand-accent">
+                              <ShoppingBag className="h-3 w-3" strokeWidth={2} />
+                              {order.product_order ? '+ Shop' : '+ Shop (paid)'}
+                            </span>
+                          )}
+                        </td>
                         <td className="max-w-[160px] truncate px-4 py-3 text-slate-600">
                           {order.location_type === 'off_campus' && (
                             <span className="mr-1 rounded-full bg-brand-ember/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brand-ember">
@@ -483,6 +491,13 @@ function AdminDashboard({ token, canViewRefills = false }) {
                       <span className="figure">{order.kg} kg · {formatNaira(order.total_amount)}</span>
                       <span className="text-xs text-slate-400">{createdLabel}</span>
                     </div>
+
+                    {(order.product_order || order.attached_product_order) && (
+                      <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-brand-accent/15 px-2 py-0.5 text-[10px] font-semibold text-brand-accent">
+                        <ShoppingBag className="h-3 w-3" strokeWidth={2} />
+                        {order.product_order ? 'Shop order bundled' : 'Paid shop order attached'}
+                      </span>
+                    )}
 
                     {(whatsappUrl(order.user?.phone) || nextStatus) && (
                       <div className="mt-3 flex gap-2" onClick={(e) => e.stopPropagation()}>

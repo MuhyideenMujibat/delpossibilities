@@ -6,6 +6,7 @@ import { setPostAuthRedirect } from '../authRedirect'
 import { setPendingOrderImage, takePendingOrderImage } from '../pendingOrderImage'
 import PageHeader from '../components/PageHeader'
 import ConfirmDialog from '../components/ConfirmDialog'
+import PaymentGatewayModal from '../components/PaymentGatewayModal'
 import AddToDeliveryModal from '../components/shop/AddToDeliveryModal'
 import HostelSelect from '../HostelSelect'
 import DeliveryZoneSelect from '../DeliveryZoneSelect'
@@ -14,6 +15,7 @@ import { useToast } from '../toastContext'
 import { useCart } from '../cartContext'
 import { useCurrentUser } from '../userContext'
 import { useDeliveryZones } from '../hooks/useDeliveryZones'
+import { usePaymentCheckout } from '../hooks/usePaymentCheckout'
 
 const KG_PRESETS = [5, 10, 12.5, 15]
 const STEP_LABELS = ['Size', 'Cylinder', 'Address', 'Summary']
@@ -90,6 +92,7 @@ function CreateOrder({ token }) {
   const { user, refresh: refreshUser } = useCurrentUser()
   const { zones: deliveryZones } = useDeliveryZones()
   const eazyMarketTiers = useEazyMarketTiers()
+  const { startPayment: startGatewayPayment, pickerOpen, pickerBusy, chooseGateway, cancelPicker } = usePaymentCheckout(token)
 
   const [step, setStep] = useState(0)
   const [kg, setKg] = useState('')
@@ -116,8 +119,6 @@ function CreateOrder({ token }) {
   // exactly as easy for anyone not using the shop.
   const [bundleCart, setBundleCart] = useState(true)
   const [pendingProductOrderId, setPendingProductOrderId] = useState(null)
-  const [referralCreditBalance, setReferralCreditBalance] = useState(0)
-  const [useReferralCredit, setUseReferralCredit] = useState(true)
   // Paid cart orders not yet riding on any delivery — eligible to attach to
   // this order instead of bundling a fresh one (mirrors the identical
   // pattern in MySubscription.jsx for subscriber refills).
@@ -180,15 +181,17 @@ function CreateOrder({ token }) {
       }
     }
     if (user.cylinder_image_url) setExistingImageUrl(user.cylinder_image_url)
-    setReferralCreditBalance(Number(user.referral_credit_balance || 0))
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [user])
 
-  // Loyalty standing is read LIVE from the shared /user fetch (not copied
-  // into local state like the form fields above) so it updates the instant
-  // the context refreshes — e.g. right after a paid order, with no page
-  // reload. PaymentCallback calls refresh() so this is fresh on return.
+  // Loyalty standing and the referral percent balance are read LIVE from
+  // the shared /user fetch (not copied into local state like the form
+  // fields above) so they update the instant the context refreshes — e.g.
+  // right after a paid order, with no page reload or remount needed.
+  // PaymentCallback calls refresh() so this is fresh on return, and stays
+  // fresh across a second order placed without leaving this page.
   const loyaltyProgressKg = Number(user?.loyalty_progress_kg || 0)
+  const referralPercentAvailable = Number(user?.referral_discount_percent_available || 0)
   const loyaltyRewardAvailable = Boolean(user?.loyalty_reward_available)
   const loyaltyKgToNextReward =
     user?.loyalty_kg_to_next_reward !== null && user?.loyalty_kg_to_next_reward !== undefined
@@ -262,19 +265,50 @@ function CreateOrder({ token }) {
   const kgValue = Number(kg)
   const kgValid = kg !== '' && !Number.isNaN(kgValue) && kgValue > 0
   const selectedZone = deliveryZones.find((z) => String(z.id) === String(deliveryZoneId))
-  const deliveryFee = locationType === 'off_campus' ? Number(selectedZone?.fee || 0) : deliveryFeeHostel
+  // Mirrors User::getsFreeDelivery / ::getsFreeGasDelivery / ::getsFreeGas.
+  // VIP: free delivery only, on gas AND shop orders. VVIP: same free
+  // delivery, PLUS the gas cost itself is free. An investor (signed
+  // investment) gets free delivery on a GAS order specifically — not shop
+  // orders, and not the gas cost itself.
+  const getsFreeShopDelivery = user?.membership_tier === 'vip' || user?.membership_tier === 'vvip'
+  const getsFreeGasDelivery = getsFreeShopDelivery || Boolean(user?.is_investor)
+  const getsFreeGas = user?.membership_tier === 'vvip'
+  const deliveryFee = getsFreeGasDelivery ? 0 : (locationType === 'off_campus' ? Number(selectedZone?.fee || 0) : deliveryFeeHostel)
   const gasCost = pricePerKg !== null && kgValid ? pricePerKg * kgValue : null
   // Mirrors the backend (OrderController::store): once loyalty_progress_kg
   // has reached the threshold, the kg of this order beyond what was still
   // needed to complete the threshold is discounted — not the whole order,
   // and not nothing. `loyaltyNeededToComplete` is 0 once the threshold is
   // already reached, so the whole order is discountable in that case.
+  // Skipped entirely for a VVIP account — nothing left to discount on an
+  // already-free order, so the reward isn't spent for zero benefit.
   const loyaltyNeededToComplete = loyalty ? Math.max(loyalty.thresholdKg - loyaltyProgressKg, 0) : 0
-  const loyaltyDiscountableKg = loyalty && kgValid ? Math.max(kgValue - loyaltyNeededToComplete, 0) : 0
+  const loyaltyDiscountableKg = loyalty && kgValid && !getsFreeGas ? Math.max(kgValue - loyaltyNeededToComplete, 0) : 0
   const loyaltyDiscount = loyalty && pricePerKg !== null && loyaltyDiscountableKg > 0
     ? pricePerKg * loyaltyDiscountableKg * (loyalty.discountPercent / 100)
     : 0
-  const referralCreditApplied = useReferralCredit ? Math.min(deliveryFee, referralCreditBalance) : 0
+  // Applied to whatever's still owed on the gas cost AFTER the loyalty
+  // discount above — loyalty goes first, referral only discounts what's
+  // left. referralPercentAvailable is a running PERCENT balance (not a
+  // coupon count — see User::grantReferralReward), so it can be over 100%
+  // (e.g. 140% from two referrals at 70% each); this one order only ever
+  // spends up to 100 percentage points of it, and whatever's left (e.g.
+  // that other 40%) stays on the balance for a future order. Mirrors
+  // OrderController::store. Also skipped for VVIP, same reasoning as loyalty.
+  const remainingAfterLoyalty = gasCost !== null ? Math.max(gasCost - loyaltyDiscount, 0) : null
+  const referralPercentUsed = getsFreeGas || !remainingAfterLoyalty
+    ? 0
+    : Math.min(referralPercentAvailable, 100)
+  const referralDiscount = referralPercentUsed > 0 && remainingAfterLoyalty !== null
+    ? Math.round(remainingAfterLoyalty * (referralPercentUsed / 100) * 100) / 100
+    : 0
+  // What's left on the balance once this order spends its share — shown so
+  // the student can see it carries over rather than vanishing. Rounded to
+  // guard against binary floating-point noise from the subtraction (e.g.
+  // 33.33 - 33.33 landing on 0.00000000003 instead of a clean 0).
+  const referralPercentRemaining = Math.round((referralPercentAvailable - referralPercentUsed) * 100) / 100
+  // The whole gas cost, wiped out as its own line item for a VVIP account.
+  const vvipDiscount = getsFreeGas && gasCost !== null ? gasCost : 0
   // Whether a fresh, still-unpaid cart is actually going to be bundled into
   // this same charge (mirrors ensureProductOrder's own condition exactly).
   // Independent of attachOrderId: a student can attach an already-paid cart
@@ -284,14 +318,14 @@ function CreateOrder({ token }) {
   const cartEazyMarketSubtotal = cart.subtotalByGroup.eazy_market || 0
   const cartGasServicesSubtotal = cart.subtotalByGroup.gas_services || 0
   const cartEazyMarketFee = useMemo(() => {
-    if (cartEazyMarketSubtotal <= 0) return 0
+    if (getsFreeShopDelivery || cartEazyMarketSubtotal <= 0) return 0
     const tier = eazyMarketTiers.find(
       (t) => cartEazyMarketSubtotal >= Number(t.min_amount) && (t.max_amount === null || cartEazyMarketSubtotal <= Number(t.max_amount))
     )
     return tier ? Number(tier.fee) : 0
-  }, [eazyMarketTiers, cartEazyMarketSubtotal])
+  }, [eazyMarketTiers, cartEazyMarketSubtotal, getsFreeShopDelivery])
   const shopChargeNow = bundlingFreshCart ? cart.subtotal + cartEazyMarketFee : 0
-  const total = gasCost !== null ? gasCost - loyaltyDiscount + deliveryFee - referralCreditApplied + shopChargeNow : null
+  const total = gasCost !== null ? Math.max(gasCost - loyaltyDiscount - referralDiscount - vvipDiscount, 0) + deliveryFee + shopChargeNow : null
   // Ordering for someone else means their cylinder photo shouldn't stand in
   // for — or overwrite — the requester's own saved default.
   const usableExistingImageUrl = forSomeoneElse ? null : existingImageUrl
@@ -408,9 +442,6 @@ function CreateOrder({ token }) {
     if (attachOrderId) {
       formData.append('attached_product_order_id', attachOrderId)
     }
-    if (useReferralCredit && referralCreditBalance > 0) {
-      formData.append('use_referral_credit', '1')
-    }
     if (imageFile) {
       formData.append('cylinder_image', imageFile)
     }
@@ -460,16 +491,20 @@ function CreateOrder({ token }) {
   }
 
   const startPayment = async (order) => {
-    const payResponse = await apiFetch(`/orders/${order.id}/pay`, { method: 'POST', token })
-    const payData = await payResponse.json().catch(() => null)
+    const { ok, data: payData, gateway, cancelled } = await startGatewayPayment('order', order.id)
 
-    if (!payResponse.ok || !payData?.authorization_url) {
-      show('Order created, but payment could not start. Retry from Track.', { type: 'error' })
+    if (cancelled) {
       navigate('/orders')
       return
     }
 
-    show('Order created — redirecting you to Paystack…', { type: 'success', duration: 2500 })
+    if (!ok || !payData?.authorization_url) {
+      show(payData?.message || 'Order created, but payment could not start. Retry from Track.', { type: 'error' })
+      navigate('/orders')
+      return
+    }
+
+    show(`Order created — redirecting you to ${gateway === 'flutterwave' ? 'Flutterwave' : 'Paystack'}…`, { type: 'success', duration: 2500 })
     window.location.href = payData.authorization_url
   }
 
@@ -526,30 +561,26 @@ function CreateOrder({ token }) {
     }
     // The photo can't be serialized — hand it over in memory instead.
     setPendingOrderImage(cylinderImage)
-    setPostAuthRedirect('/')
-    navigate('/login', { state: { from: '/' } })
+    setPostAuthRedirect('/home')
+    navigate('/login', { state: { from: '/home' } })
   }
 
   return (
     <div className="mx-auto max-w-2xl">
       <PageHeader title="Create Order" subtitle="Request a gas refill for delivery to your hostel." icon={PlusCircle} />
 
-      {referralCreditBalance > 0 && (
-        <label className="mb-4 flex items-start gap-2.5 rounded-xl border border-brand-teal/20 bg-brand-teal/5 px-4 py-3 text-sm">
-          <input
-            type="checkbox"
-            checked={useReferralCredit}
-            onChange={(e) => setUseReferralCredit(e.target.checked)}
-            className="mt-0.5 h-4 w-4 flex-shrink-0 accent-brand-teal"
-          />
-          <span className="flex items-start gap-2">
-            <Gift className="mt-0.5 h-4 w-4 flex-shrink-0 text-brand-teal" strokeWidth={2} />
-            <span>
-              <span className="font-medium text-brand-navy">Use your referral credit</span> — you have{' '}
-              {formatNaira(referralCreditBalance)} available to offset this order's delivery fee.
-            </span>
+      {!getsFreeGas && referralPercentAvailable > 0 && (
+        <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-brand-teal/20 bg-brand-teal/5 px-4 py-3 text-sm">
+          <Gift className="mt-0.5 h-4 w-4 flex-shrink-0 text-brand-teal" strokeWidth={2} />
+          <span>
+            <span className="font-medium text-brand-navy">Referral discount</span> — you have{' '}
+            <strong>{referralPercentAvailable}%</strong> available. Up to 100% is applied to this order&apos;s gas
+            cost automatically at checkout — enough to make it fully free once you hit that mark.
+            {kgValid && referralPercentUsed > 0 && referralPercentRemaining > 0 && (
+              <> {referralPercentRemaining}% will carry over to your next order.</>
+            )}
           </span>
-        </label>
+        </div>
       )}
 
       {/* Two independent add-ons — a student with a paid cart to deliver AND
@@ -697,15 +728,30 @@ function CreateOrder({ token }) {
                     <span className="figure font-medium text-brand-teal">&minus;{formatNaira(loyaltyDiscount)}</span>
                   </div>
                 )}
+                {vvipDiscount > 0 && (
+                  <div className="mt-1 flex items-center justify-between">
+                    <span className="text-brand-teal">VVIP discount — gas is free</span>
+                    <span className="figure font-medium text-brand-teal">&minus;{formatNaira(vvipDiscount)}</span>
+                  </div>
+                )}
                 <div className="mt-1 flex items-center justify-between">
                   <span className="text-slate-500">Delivery fee</span>
                   <span className="figure font-medium text-brand-navy">{formatNaira(deliveryFee)}</span>
                 </div>
                 {renderShopBreakdownLines()}
-                {referralCreditApplied > 0 && (
-                  <div className="mt-1 flex items-center justify-between">
-                    <span className="text-brand-teal">Referral credit</span>
-                    <span className="figure font-medium text-brand-teal">&minus;{formatNaira(referralCreditApplied)}</span>
+                {referralDiscount > 0 && (
+                  <div className="mt-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-brand-teal">
+                        Referral discount ({referralPercentUsed}%)
+                      </span>
+                      <span className="figure font-medium text-brand-teal">&minus;{formatNaira(referralDiscount)}</span>
+                    </div>
+                    {referralPercentRemaining > 0 && (
+                      <p className="text-xs text-slate-400">
+                        {referralPercentRemaining}% left for next time
+                      </p>
+                    )}
                   </div>
                 )}
                 <div className="mt-2 flex items-center justify-between border-t border-slate-200 pt-2">
@@ -858,15 +904,30 @@ function CreateOrder({ token }) {
                     <span className="figure font-medium text-brand-teal">&minus;{formatNaira(loyaltyDiscount)}</span>
                   </div>
                 )}
+                {vvipDiscount > 0 && (
+                  <div className="mt-1 flex items-center justify-between">
+                    <span className="text-brand-teal">VVIP discount — gas is free</span>
+                    <span className="figure font-medium text-brand-teal">&minus;{formatNaira(vvipDiscount)}</span>
+                  </div>
+                )}
                 <div className="mt-1 flex items-center justify-between">
                   <span className="text-slate-500">Delivery fee</span>
                   <span className="figure font-medium text-brand-navy">{formatNaira(deliveryFee)}</span>
                 </div>
                 {renderShopBreakdownLines()}
-                {referralCreditApplied > 0 && (
-                  <div className="mt-1 flex items-center justify-between">
-                    <span className="text-brand-teal">Referral credit</span>
-                    <span className="figure font-medium text-brand-teal">&minus;{formatNaira(referralCreditApplied)}</span>
+                {referralDiscount > 0 && (
+                  <div className="mt-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-brand-teal">
+                        Referral discount ({referralPercentUsed}%)
+                      </span>
+                      <span className="figure font-medium text-brand-teal">&minus;{formatNaira(referralDiscount)}</span>
+                    </div>
+                    {referralPercentRemaining > 0 && (
+                      <p className="text-xs text-slate-400">
+                        {referralPercentRemaining}% left for next time
+                      </p>
+                    )}
                   </div>
                 )}
                 <div className="mt-2 flex items-center justify-between border-t border-slate-200 pt-2">
@@ -906,15 +967,30 @@ function CreateOrder({ token }) {
                     <span className="figure font-medium text-brand-teal">&minus;{formatNaira(loyaltyDiscount)}</span>
                   </div>
                 )}
+                {vvipDiscount > 0 && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-brand-teal">VVIP discount — gas is free</span>
+                    <span className="figure font-medium text-brand-teal">&minus;{formatNaira(vvipDiscount)}</span>
+                  </div>
+                )}
                 <div className="flex items-center justify-between">
                   <span className="text-slate-500">Delivery fee</span>
                   <span className="figure font-medium text-brand-navy">{formatNaira(deliveryFee)}</span>
                 </div>
                 {renderShopBreakdownLines()}
-                {referralCreditApplied > 0 && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-brand-teal">Referral credit</span>
-                    <span className="figure font-medium text-brand-teal">&minus;{formatNaira(referralCreditApplied)}</span>
+                {referralDiscount > 0 && (
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-brand-teal">
+                        Referral discount ({referralPercentUsed}%)
+                      </span>
+                      <span className="figure font-medium text-brand-teal">&minus;{formatNaira(referralDiscount)}</span>
+                    </div>
+                    {referralPercentRemaining > 0 && (
+                      <p className="text-xs text-slate-400">
+                        {referralPercentRemaining}% left for next time
+                      </p>
+                    )}
                   </div>
                 )}
                 <div className="flex items-center justify-between border-t border-slate-100 pt-2">
@@ -993,12 +1069,14 @@ function CreateOrder({ token }) {
       <ConfirmDialog
         open={confirmOpen}
         title="Place this order?"
-        message={`${kg} kg for ${total !== null ? formatNaira(total) : '—'} — you'll be sent to Paystack to pay.`}
+        message={`${kg} kg for ${total !== null ? formatNaira(total) : '—'} — you'll be sent to pay next.`}
         confirmLabel="Confirm & Pay"
         busy={submitting}
         onConfirm={handleCheckout}
         onCancel={() => setConfirmOpen(false)}
       />
+
+      <PaymentGatewayModal open={pickerOpen} busy={pickerBusy} onChoose={chooseGateway} onCancel={cancelPicker} />
     </div>
   )
 }

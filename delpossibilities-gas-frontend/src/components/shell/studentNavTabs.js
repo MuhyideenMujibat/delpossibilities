@@ -4,7 +4,7 @@ import { Home, Package, CalendarCheck, ShoppingBag, TrendingUp, UserCircle } fro
 // inline links) and MobileTabBar (bottom icons) map over this same list, so
 // the six destinations and their icons never drift apart between breakpoints.
 export const STUDENT_NAV_TABS = [
-  { to: '/', label: 'Home', icon: Home },
+  { to: '/home', label: 'Home', icon: Home },
   { to: '/orders', label: 'Track', icon: Package },
   { to: '/subscription', label: 'Subscription', icon: CalendarCheck },
   { to: '/shop', label: 'Shop', icon: ShoppingBag },

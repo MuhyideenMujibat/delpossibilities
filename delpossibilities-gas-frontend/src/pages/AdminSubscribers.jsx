@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
-import { CalendarCheck, Search, Users, Flame, Wallet, AlarmClock, X } from 'lucide-react'
-import { apiFetch, formatNaira, formatDate } from '../api'
+import { CalendarCheck, Search, Users, Flame, Wallet, AlarmClock, X, MessageCircle, Phone } from 'lucide-react'
+import { apiFetch, formatNaira, formatDate, whatsappUrl } from '../api'
 import PageHeader from '../components/PageHeader'
 import StatCard from '../components/StatCard'
 import EmptyState from '../components/EmptyState'
@@ -10,6 +10,40 @@ import { paginate } from '../pagination'
 
 const TIER_LABELS = { bronze: 'Bronze', silver: 'Silver', gold: 'Gold' }
 const PACKAGE_LABELS = { session: 'Session', semester: 'Semester' }
+
+// WhatsApp + call shortcuts for reaching a subscriber. Falls back to the
+// delivery recipient's phone when the account itself has none on file.
+function ContactLinks({ subscriber }) {
+  const phone = subscriber.user?.phone || subscriber.recipient_phone
+  if (!phone) return <span className="text-slate-400">—</span>
+
+  const wa = whatsappUrl(phone)
+
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {wa && (
+        <a
+          href={wa}
+          target="_blank"
+          rel="noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="inline-flex items-center gap-1 rounded-md bg-brand-teal/10 px-2 py-1 text-xs font-medium text-brand-teal hover:bg-brand-teal/20"
+        >
+          <MessageCircle className="h-3.5 w-3.5" strokeWidth={2} />
+          Message
+        </a>
+      )}
+      <a
+        href={`tel:${phone}`}
+        onClick={(e) => e.stopPropagation()}
+        className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200"
+      >
+        <Phone className="h-3.5 w-3.5" strokeWidth={2} />
+        {phone}
+      </a>
+    </span>
+  )
+}
 const STATUS_LABELS = { pending: 'Pending Payment', active: 'Active', expired: 'Expired' }
 
 const EMPTY_FILTERS = { search: '', packageType: 'all', tier: 'all', status: 'all', expiry: 'all' }
@@ -238,6 +272,7 @@ function AdminSubscribers({ token }) {
                     <tr>
                       <th className="th-cell">Customer ID</th>
                       <th className="th-cell">Student</th>
+                      <th className="th-cell">Contact</th>
                       <th className="th-cell">Plan</th>
                       <th className="th-cell">Locked Price</th>
                       <th className="th-cell">Status</th>
@@ -249,6 +284,7 @@ function AdminSubscribers({ token }) {
                       <tr key={subscriber.id}>
                         <td className="figure px-4 py-3 font-medium text-brand-navy">{subscriber.customer_id}</td>
                         <td className="max-w-[160px] truncate px-4 py-3 text-slate-600">{subscriber.user?.name || '—'}</td>
+                        <td className="px-4 py-3"><ContactLinks subscriber={subscriber} /></td>
                         <td className="px-4 py-3 text-slate-600">
                           {TIER_LABELS[subscriber.plan?.tier] || subscriber.plan?.tier} · {PACKAGE_LABELS[subscriber.plan?.package_type] || subscriber.plan?.package_type}
                         </td>
@@ -284,6 +320,9 @@ function AdminSubscribers({ token }) {
                     <p className="mt-1 text-xs text-slate-400">
                       {subscriber.ends_at ? `Ends ${formatDate(subscriber.ends_at)}` : 'No end date yet'}
                     </p>
+                    <div className="mt-3">
+                      <ContactLinks subscriber={subscriber} />
+                    </div>
                   </div>
                 ))}
               </div>

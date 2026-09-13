@@ -10,6 +10,7 @@ use App\Http\Controllers\AdminStudentController;
 use App\Http\Controllers\AdminUserController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\FeedbackSubmissionController;
+use App\Http\Controllers\FlutterwaveController;
 use App\Http\Controllers\InvestmentController;
 use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\OrderController;
@@ -31,7 +32,10 @@ use Illuminate\Support\Facades\Route;
 
 
 Route::get('/user', function (Request $request) {
-    return $request->user();
+    // ->append, not a global $appends entry — is_investor runs a query, and
+    // this is the one place a single user (not a bulk list) is serialized,
+    // so the frontend can preview free gas delivery (see User::isInvestor).
+    return $request->user()->append('is_investor');
 })->middleware('auth:sanctum');
 
 Route::post('/register', [AuthController::class, 'register']);
@@ -78,6 +82,12 @@ Route::get('/delivery-zones', function () {
     );
 });
 
+// Public so the Pay Now flow (gas orders + subscriptions) knows whether to
+// show a gateway picker before login-gated pages even load. Admin toggles
+// live under manage_settings below (same /settings/price endpoint as every
+// other setting).
+Route::get('/payment-gateways', [SettingController::class, 'paymentGateways']);
+
 // Public so Eazy Market checkout can compute/display the delivery fee tier
 // before login. Admin CRUD lives under super_admin below.
 Route::get('/eazy-market-delivery-tiers', function () {
@@ -94,6 +104,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/my-orders', [OrderController::class, 'myOrders']);
     Route::post('/orders/{order}/pay', [OrderController::class, 'pay']);
     Route::post('/orders/{order}/verify-payment', [OrderController::class, 'verifyPayment']);
+    Route::post('/orders/{order}/pay-flutterwave', [FlutterwaveController::class, 'payOrder']);
+    Route::post('/orders/{order}/verify-flutterwave-payment', [FlutterwaveController::class, 'verifyOrderPayment']);
 
     Route::post('/product-orders', [ProductOrderController::class, 'store']);
     Route::get('/my-product-order', [ProductOrderController::class, 'mine']);
@@ -105,6 +117,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/my-subscription', [SubscriberController::class, 'mine']);
     Route::post('/subscribers/{subscriber}/pay', [SubscriberController::class, 'pay']);
     Route::post('/subscribers/{subscriber}/verify-payment', [SubscriberController::class, 'verifyPayment']);
+    Route::post('/subscribers/{subscriber}/pay-flutterwave', [FlutterwaveController::class, 'paySubscriber']);
+    Route::post('/subscribers/{subscriber}/verify-flutterwave-payment', [FlutterwaveController::class, 'verifySubscriberPayment']);
     Route::post('/subscribers/{subscriber}/transfer', [SubscriberController::class, 'transfer']);
     Route::post('/refills', [RefillController::class, 'store']);
 
@@ -209,3 +223,4 @@ Route::middleware('auth:sanctum')->group(function () {
     });
 });
 Route::post('/paystack/webhook', [App\Http\Controllers\PaystackWebhookController::class, 'handle']);
+Route::post('/flutterwave/webhook', [App\Http\Controllers\FlutterwaveWebhookController::class, 'handle']);

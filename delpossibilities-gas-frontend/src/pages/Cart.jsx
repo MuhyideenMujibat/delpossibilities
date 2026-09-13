@@ -43,7 +43,7 @@ function CartLine({ item }) {
       )}
 
       <div className="min-w-0 flex-1">
-        <p className="truncate font-medium text-brand-navy">{item.snapshot.name}</p>
+        <p className="font-medium leading-snug text-brand-navy">{item.snapshot.name}</p>
         {item.snapshot.variant_label && <p className="text-xs text-slate-400">{item.snapshot.variant_label}</p>}
         <p className="figure mt-0.5 text-sm text-slate-600">{formatNaira(item.snapshot.price)}</p>
       </div>
@@ -120,13 +120,16 @@ function Cart({ token }) {
   )
 
   const eazyMarketSubtotal = cart.subtotalByGroup.eazy_market || 0
+  // VIP and VVIP accounts never pay a delivery fee — mirrors
+  // ProductOrderController::store / User::getsFreeDelivery.
+  const getsFreeDelivery = user?.membership_tier === 'vip' || user?.membership_tier === 'vvip'
   const eazyMarketFee = useMemo(() => {
-    if (eazyMarketSubtotal <= 0) return 0
+    if (getsFreeDelivery || eazyMarketSubtotal <= 0) return 0
     const tier = tiers.find(
       (t) => eazyMarketSubtotal >= Number(t.min_amount) && (t.max_amount === null || eazyMarketSubtotal <= Number(t.max_amount))
     )
     return tier ? Number(tier.fee) : 0
-  }, [tiers, eazyMarketSubtotal])
+  }, [tiers, eazyMarketSubtotal, getsFreeDelivery])
 
   const referralCreditApplied = useReferralCredit ? Math.min(eazyMarketFee, referralCreditBalance) : 0
   const total = cart.subtotal + eazyMarketFee - referralCreditApplied
@@ -264,7 +267,7 @@ function Cart({ token }) {
           </p>
         ) : (
           <div className="mt-5 flex flex-col gap-2 sm:flex-row">
-            <button type="button" onClick={() => navigate('/')} className="btn-outline flex-1">
+            <button type="button" onClick={() => navigate('/home')} className="btn-outline flex-1">
               <PlusCircle className="h-4 w-4" strokeWidth={2} />
               Add to My Gas Refill Order
             </button>

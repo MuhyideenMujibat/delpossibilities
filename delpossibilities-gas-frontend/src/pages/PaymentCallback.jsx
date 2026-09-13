@@ -4,23 +4,38 @@ import { CheckCircle2, Loader2, XCircle, HelpCircle } from 'lucide-react'
 import { apiFetch, formatNaira } from '../api'
 import { useCurrentUser } from '../userContext'
 
-// Paystack's redirect only carries a `reference` — it doesn't tell us
-// whether the charge succeeded. Rather than waiting on the webhook (which
-// requires Paystack's servers to reach ours — impossible in local dev, and
-// not instant even in production), this page calls verify-payment, which
-// has the backend ask Paystack directly and update the order synchronously.
+// Paystack's redirect carries a `reference` (or `trxref`); Flutterwave's
+// carries `tx_ref` + a numeric `transaction_id` (and its own `status` query
+// param, which is NOT trustworthy on its own — see verifyOrder/verifySubscription
+// below, which always re-check with the backend). Neither redirect tells us
+// for certain the charge succeeded. Rather than waiting on a webhook (which
+// requires the gateway's servers to reach ours — impossible in local dev,
+// and not instant even in production), this page calls the matching
+// verify-payment endpoint, which has the backend ask the gateway directly
+// and update the order/subscriber synchronously.
 // Subscription and standalone cart-checkout payments reuse this same
 // callback page (one shared FRONTEND_PAYMENT_CALLBACK_URL on the backend
-// for all three flows) — the reference's prefix ('order_...' vs
+// for every flow/gateway) — our own reference/tx_ref prefix ('order_...' vs
 // 'subscription_...' vs 'product_order_...', see OrderController::pay /
-// SubscriberController::pay / ProductOrderController::pay) says which this is.
+// SubscriberController::pay / ProductOrderController::pay /
+// FlutterwaveController::payOrder/paySubscriber) says which this is.
 const isSubscriptionReference = (reference) => reference.startsWith('subscription_')
 const isProductOrderReference = (reference) => reference.startsWith('product_order_')
+
+// Flutterwave doesn't share Paystack's 'failed'/'abandoned' vocabulary — its
+// own terminal failure state is 'cancelled', plus whatever verifyTransaction
+// normalizes a mismatch down to (see FlutterwaveController::verifyTransaction).
+const FAILED_STATUSES = ['failed', 'abandoned', 'cancelled']
 
 function PaymentCallback({ token }) {
   const [searchParams] = useSearchParams()
   const { refresh: refreshUser } = useCurrentUser()
-  const reference = searchParams.get('reference') || searchParams.get('trxref') || ''
+  const txRef = searchParams.get('tx_ref') || ''
+  const transactionId = searchParams.get('transaction_id') || ''
+  // Flutterwave sends tx_ref (no `reference`/`trxref`) — falling back to it
+  // keeps the prefix-based routing below working for either gateway.
+  const reference = searchParams.get('reference') || searchParams.get('trxref') || txRef
+  const isFlutterwaveRedirect = Boolean(transactionId)
   const [phase, setPhase] = useState('checking') // checking | confirmed | failed | unknown
   const [order, setOrder] = useState(null)
   const [loyalty, setLoyalty] = useState(null)
@@ -28,6 +43,10 @@ function PaymentCallback({ token }) {
   const [productOrder, setProductOrder] = useState(null)
   const isSubscription = isSubscriptionReference(reference)
   const isProductOrder = isProductOrderReference(reference)
+  // A standalone cart payment that's actually riding on a subscription
+  // refill (built from / attached to a refill request) — send them back to
+  // My Subscription rather than the empty cart.
+  const productOrderOnRefill = Boolean(productOrder && (productOrder.refill || productOrder.attaching_refill))
 
   useEffect(() => {
     let cancelled = false
@@ -40,7 +59,7 @@ function PaymentCallback({ token }) {
         const orders = Array.isArray(data) ? data : data.orders || data.data || []
 
         const match = reference
-          ? orders.find((o) => o.paystack_reference === reference)
+          ? orders.find((o) => o.paystack_reference === reference || o.flutterwave_tx_ref === reference)
           : [...orders].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0]
 
         if (!match) {
@@ -59,7 +78,18 @@ function PaymentCallback({ token }) {
           return
         }
 
-        const verifyResponse = await apiFetch(`/orders/${match.id}/verify-payment`, { method: 'POST', token })
+        const usingFlutterwave = match.payment_gateway === 'flutterwave' || isFlutterwaveRedirect
+        if (usingFlutterwave && !transactionId) {
+          // No transaction id to verify with (e.g. a stale/direct reload of
+          // this URL) — can't ask Flutterwave anything definitive.
+          if (!cancelled) setOrder(match)
+          if (!cancelled) setPhase('unknown')
+          return
+        }
+
+        const verifyResponse = usingFlutterwave
+          ? await apiFetch(`/orders/${match.id}/verify-flutterwave-payment`, { method: 'POST', token, body: { transaction_id: transactionId } })
+          : await apiFetch(`/orders/${match.id}/verify-payment`, { method: 'POST', token })
         const verifyData = await verifyResponse.json().catch(() => null)
 
         if (cancelled) return
@@ -74,7 +104,7 @@ function PaymentCallback({ token }) {
           return
         }
 
-        if (verifyResponse.ok && ['failed', 'abandoned'].includes(verifyData?.paystack_status)) {
+        if (verifyResponse.ok && FAILED_STATUSES.includes(verifyData?.paystack_status || verifyData?.flutterwave_status)) {
           setOrder(match)
           setPhase('failed')
           return
@@ -109,7 +139,16 @@ function PaymentCallback({ token }) {
           return
         }
 
-        const verifyResponse = await apiFetch(`/subscribers/${match.id}/verify-payment`, { method: 'POST', token })
+        const usingFlutterwave = match.payment_gateway === 'flutterwave' || isFlutterwaveRedirect
+        if (usingFlutterwave && !transactionId) {
+          if (!cancelled) setSubscription(match)
+          if (!cancelled) setPhase('unknown')
+          return
+        }
+
+        const verifyResponse = usingFlutterwave
+          ? await apiFetch(`/subscribers/${match.id}/verify-flutterwave-payment`, { method: 'POST', token, body: { transaction_id: transactionId } })
+          : await apiFetch(`/subscribers/${match.id}/verify-payment`, { method: 'POST', token })
         const verifyData = await verifyResponse.json().catch(() => null)
 
         if (cancelled) return
@@ -120,7 +159,7 @@ function PaymentCallback({ token }) {
           return
         }
 
-        if (verifyResponse.ok && ['failed', 'abandoned'].includes(verifyData?.paystack_status)) {
+        if (verifyResponse.ok && FAILED_STATUSES.includes(verifyData?.paystack_status || verifyData?.flutterwave_status)) {
           setSubscription(match)
           setPhase('failed')
           return
@@ -195,7 +234,7 @@ function PaymentCallback({ token }) {
     // refreshUser is a fresh function each render (UserProvider doesn't
     // memoize it) — deliberately excluded so this doesn't re-run every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, reference, isSubscription, isProductOrder])
+  }, [token, reference, transactionId, isFlutterwaveRedirect, isSubscription, isProductOrder])
 
   return (
     <div className="mx-auto max-w-md">
@@ -216,7 +255,9 @@ function PaymentCallback({ token }) {
               {isSubscription
                 ? 'Your subscription is now active.'
                 : isProductOrder
-                  ? 'Your order has been received.'
+                  ? productOrderOnRefill
+                    ? 'Your cart is set — it will be delivered with your subscription refill.'
+                    : 'Your order has been received.'
                   : 'Your gas refill order has been received.'}
             </p>
 
@@ -314,10 +355,20 @@ function PaymentCallback({ token }) {
             )}
 
             <Link
-              to={isSubscription ? '/subscription' : isProductOrder ? '/cart' : order ? `/orders/${order.id}` : '/orders'}
+              to={
+                isSubscription
+                  ? '/subscription'
+                  : isProductOrder
+                    ? productOrderOnRefill ? '/subscription' : '/cart'
+                    : order ? `/orders/${order.id}` : '/orders'
+              }
               className="btn-primary mt-6 w-full"
             >
-              {isSubscription ? 'View My Subscription' : isProductOrder ? 'Back to My Cart' : 'Track This Order'}
+              {isSubscription
+                ? 'View My Subscription'
+                : isProductOrder
+                  ? productOrderOnRefill ? 'View My Subscription' : 'Back to My Cart'
+                  : 'Track This Order'}
             </Link>
           </>
         )}
@@ -327,7 +378,7 @@ function PaymentCallback({ token }) {
             <XCircle className="mx-auto h-12 w-12 text-red-500" strokeWidth={1.6} />
             <h2 className="mt-4 font-heading text-xl font-bold text-brand-navy">Payment Didn't Go Through</h2>
             <p className="mt-2 text-sm text-slate-500">
-              Paystack reported this payment as failed or abandoned. No charge was completed — you can retry from{' '}
+              The payment provider reported this as failed or abandoned. No charge was completed — you can retry from{' '}
               {isSubscription ? 'My Subscription' : isProductOrder ? 'My Cart' : 'My Orders'}.
             </p>
             <Link

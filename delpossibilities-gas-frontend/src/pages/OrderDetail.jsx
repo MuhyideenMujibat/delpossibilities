@@ -7,6 +7,8 @@ import StatusBadge from '../StatusBadge'
 import PageHeader from '../components/PageHeader'
 import EmptyState from '../components/EmptyState'
 import OrderTimeline from '../components/OrderTimeline'
+import PaymentGatewayModal from '../components/PaymentGatewayModal'
+import { usePaymentCheckout } from '../hooks/usePaymentCheckout'
 
 // One shop cart riding on this refill. Rendered up to twice — once for a
 // cart bundled unpaid into this order's charge (order.product_order), once
@@ -63,6 +65,7 @@ function OrderDetail({ token }) {
   const [orders, setOrders] = useState(null)
   const [error, setError] = useState('')
   const [paying, setPaying] = useState(false)
+  const { startPayment: startGatewayPayment, pickerOpen, pickerBusy, chooseGateway, cancelPicker } = usePaymentCheckout(token)
 
   useEffect(() => {
     apiFetch('/my-orders', { token })
@@ -76,10 +79,14 @@ function OrderDetail({ token }) {
   const handlePayNow = async () => {
     setPaying(true)
     try {
-      const response = await apiFetch(`/orders/${order.id}/pay`, { method: 'POST', token })
-      const data = await response.json().catch(() => null)
+      const { ok, data, cancelled } = await startGatewayPayment('order', order.id)
 
-      if (!response.ok || !data?.authorization_url) {
+      if (cancelled) {
+        setPaying(false)
+        return
+      }
+
+      if (!ok || !data?.authorization_url) {
         show(data?.message || 'Could not start payment.', { type: 'error' })
         setPaying(false)
         return
@@ -180,8 +187,30 @@ function OrderDetail({ token }) {
                   <span className="text-brand-teal">Loyalty discount</span>
                   <span className="figure font-medium text-brand-teal">&minus;{formatNaira(order.loyalty_discount_amount)}</span>
                 </div>
-              )}         
-              
+              )}
+
+              {Number(order.referral_discount_amount) > 0 && (() => {
+                // Referral discounts a gas order AFTER the loyalty discount
+                // (see OrderController::store), so the base for "what % was
+                // this" is what was left post-loyalty, not the full gas cost.
+                const gasCost = order.kg * order.price_per_kg
+                const baseAfterLoyalty = order.loyalty_discount_applied ? gasCost - order.loyalty_discount_amount : gasCost
+                const percent = baseAfterLoyalty > 0 ? Math.round((order.referral_discount_amount / baseAfterLoyalty) * 100) : 0
+                return (
+                  <div className="flex items-center justify-between">
+                    <span className="text-brand-teal">Referral discount ({percent}%)</span>
+                    <span className="figure font-medium text-brand-teal">&minus;{formatNaira(order.referral_discount_amount)}</span>
+                  </div>
+                )
+              })()}
+
+              {Number(order.vvip_discount_amount) > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-brand-teal">VVIP discount — gas is free</span>
+                  <span className="figure font-medium text-brand-teal">&minus;{formatNaira(order.vvip_discount_amount)}</span>
+                </div>
+              )}
+
 
               <div className="flex items-center justify-between">
                 <span className="text-slate-500">Delivery fee</span>
@@ -203,7 +232,13 @@ function OrderDetail({ token }) {
                   <Wallet className="h-3.5 w-3.5 flex-shrink-0" strokeWidth={1.8} />
                   Payment
                 </span>
-                <span className="text-slate-700">{order.paystack_reference ? 'Paid via Paystack' : 'Not yet paid'}</span>
+                <span className="text-slate-700">
+                  {order.payment_gateway === 'flutterwave'
+                    ? 'Paid via Flutterwave'
+                    : order.payment_gateway === 'paystack' || order.paystack_reference
+                      ? 'Paid via Paystack'
+                      : 'Not yet paid'}
+                </span>
               </div>
             </div>
 
@@ -225,6 +260,8 @@ function OrderDetail({ token }) {
           )}
         </div>
       </div>
+
+      <PaymentGatewayModal open={pickerOpen} busy={pickerBusy} onChoose={chooseGateway} onCancel={cancelPicker} />
     </div>
   )
 }

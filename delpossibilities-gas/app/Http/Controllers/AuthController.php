@@ -30,7 +30,31 @@ class AuthController extends Controller
             // against the admin-managed hostel list.
             'hostel' => ['required', 'string', 'max:255'],
             'phone' => ['required', 'string', 'max:255'],
-            'referred_by_customer_id' => ['nullable', 'string', 'exists:subscribers,customer_id'],
+            // Every account now carries a customer_id from signup, so a
+            // referral code can belong to a plain user or a legacy subscriber.
+            'referred_by_customer_id' => [
+                'nullable', 'string',
+                function ($attribute, $value, $fail) {
+                    $referrerUserId = \App\Models\User::where('customer_id', $value)->value('id')
+                        ?: \App\Models\Subscriber::where('customer_id', $value)->value('user_id');
+
+                    if (! $referrerUserId) {
+                        $fail('That referral code was not found.');
+
+                        return;
+                    }
+
+                    // A VVIP account never pays for gas in the first place,
+                    // so a percent-off-gas coupon is worthless to them — see
+                    // User::grantReferralReward, which also guards this
+                    // defensively for an account promoted to VVIP after
+                    // already referring people.
+                    $referrer = \App\Models\User::find($referrerUserId);
+                    if ($referrer && $referrer->membership_tier === \App\Models\User::TIER_VVIP) {
+                        $fail('This Customer ID belongs to a VVIP account, which can\'t refer other students.');
+                    }
+                },
+            ],
         ];
 
         if ($request->input('location_type') === 'hostel') {
@@ -88,11 +112,19 @@ class AuthController extends Controller
 
         // Resolved silently — a referral code that stopped resolving in the
         // few minutes between submitting the form and verifying the OTP
-        // (e.g. the subscriber was deleted) just means no referral link,
-        // not a failed registration this far in.
-        $referrerUserId = $pending->referred_by_customer_id
-            ? \App\Models\Subscriber::where('customer_id', $pending->referred_by_customer_id)->value('user_id')
-            : null;
+        // (e.g. the account was deleted, or promoted to VVIP after already
+        // passing the register-step check above) just means no referral
+        // link, not a failed registration this far in. Prefer a user's own
+        // code, fall back to a legacy subscriber code.
+        $referrerUserId = null;
+        if ($pending->referred_by_customer_id) {
+            $referrerUserId = \App\Models\User::where('customer_id', $pending->referred_by_customer_id)->value('id')
+                ?: \App\Models\Subscriber::where('customer_id', $pending->referred_by_customer_id)->value('user_id');
+
+            if ($referrerUserId && User::find($referrerUserId)?->membership_tier === User::TIER_VVIP) {
+                $referrerUserId = null;
+            }
+        }
 
         $user = User::create([
             'name' => $pending->name,
@@ -107,6 +139,13 @@ class AuthController extends Controller
         ]);
 
         $pending->delete();
+
+        // The referrer's coupon is granted only once — later, when this
+        // student either pays for a gas order of 3 kg+ or takes a
+        // subscription (see User::grantReferralRewardForGasOrder /
+        // ::grantReferralRewardForSubscription). Nothing to do here at
+        // registration; the student who used the code gets no discount
+        // themselves.
 
         $token = $user->createToken('auth_token')->plainTextToken;
 
