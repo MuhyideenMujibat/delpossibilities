@@ -8,6 +8,8 @@ import StatCard from '../components/StatCard'
 import EmptyState from '../components/EmptyState'
 import OrderFilters, { EMPTY_FILTERS } from '../components/OrderFilters'
 import PaginationControls from '../components/PaginationControls'
+import PaymentGatewayModal from '../components/PaymentGatewayModal'
+import { usePaymentCheckout } from '../hooks/usePaymentCheckout'
 import { paginate } from '../pagination'
 
 function redirectToPayment(authorizationUrl) {
@@ -23,6 +25,7 @@ function MyOrders({ token }) {
   const [filters, setFilters] = useState(EMPTY_FILTERS)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(15)
+  const { startPayment: startGatewayPayment, pickerOpen, pickerBusy, chooseGateway, cancelPicker } = usePaymentCheckout(token)
 
   useEffect(() => {
     const fetchOrders = async () => {
@@ -53,14 +56,14 @@ function MyOrders({ token }) {
     setError('')
 
     try {
-      const response = await apiFetch(`/orders/${orderId}/pay`, {
-        method: 'POST',
-        token,
-      })
+      const { ok, data, cancelled } = await startGatewayPayment('order', orderId)
 
-      const data = await response.json().catch(() => null)
+      if (cancelled) {
+        setPayingId(null)
+        return
+      }
 
-      if (!response.ok || !data?.authorization_url) {
+      if (!ok || !data?.authorization_url) {
         setError(data?.message || 'Could not start payment.')
         setPayingId(null)
         return
@@ -253,6 +256,8 @@ function MyOrders({ token }) {
           />
         </>
       )}
+
+      <PaymentGatewayModal open={pickerOpen} busy={pickerBusy} onChoose={chooseGateway} onCancel={cancelPicker} />
     </div>
   )
 }
