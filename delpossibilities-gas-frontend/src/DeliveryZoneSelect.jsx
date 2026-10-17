@@ -1,9 +1,11 @@
 import { ChevronDown } from 'lucide-react'
 import { useDeliveryZones } from './hooks/useDeliveryZones'
-import { formatNaira } from './api'
 
 // Controlled <select> of admin-managed off-campus delivery zones — value is
 // the zone id (not name), since the fee needs to be looked up numerically.
+// Deliberately doesn't show each zone's fee here — just the zone name — so
+// a student picks by location, not by price-shopping zones; the actual fee
+// still shows in the order total elsewhere on the page.
 function DeliveryZoneSelect({ id, value, onChange, icon: Icon, required = false, className = '' }) {
   const { zones, loading } = useDeliveryZones()
 
@@ -29,7 +31,7 @@ function DeliveryZoneSelect({ id, value, onChange, icon: Icon, required = false,
         </option>
         {zones.map((zone) => (
           <option key={zone.id} value={zone.id}>
-            {zone.name} — {formatNaira(zone.fee)}
+            {zone.name}
           </option>
         ))}
       </select>

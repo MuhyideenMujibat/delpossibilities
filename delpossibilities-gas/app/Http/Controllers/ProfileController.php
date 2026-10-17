@@ -46,13 +46,13 @@ class ProfileController extends Controller
     public function uploadCylinderImage(Request $request)
     {
         $validated = $request->validate([
-            'cylinder_image' => ['required', 'image', 'max:5120'],
+            'cylinder_image' => ['required', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
         ]);
 
         $user = $request->user();
         $oldImage = $user->cylinder_image;
 
-        $path = $request->file('cylinder_image')->store('cylinders/profile', 'public');
+        $path = \App\Support\ImageOptimizer::store($request->file('cylinder_image'), 'cylinders/profile');
 
         $user->update(['cylinder_image' => $path]);
 

@@ -10,7 +10,7 @@ class AdminStudentController extends Controller
     public function index()
     {
         return response()->json(
-            User::where('role', 'student')->withCount('orders')->latest()->get()
+            User::where('role', 'student')->with('permissions')->withCount('orders')->latest()->get()
         );
     }
 

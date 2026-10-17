@@ -23,7 +23,7 @@ class AuthController extends Controller
         $rules = [
             'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'string', 'email', 'max:255', 'unique:users,email'],
-            'password' => ['required', 'string', 'min:8'],
+            'password' => ['required', 'string', 'min:8', 'confirmed'],
             'location_type' => ['required', Rule::in(['hostel', 'off_campus'])],
             // 'hostel' doubles as the free-text delivery address for
             // off-campus students — only on-campus values are checked
@@ -44,11 +44,11 @@ class AuthController extends Controller
                         return;
                     }
 
-                    // A VVIP account never pays for gas in the first place,
-                    // so a percent-off-gas coupon is worthless to them — see
-                    // User::grantReferralReward, which also guards this
-                    // defensively for an account promoted to VVIP after
-                    // already referring people.
+                    // A VVIP account never pays for gas in the first place —
+                    // referring is blocked outright here rather than letting
+                    // them collect referral rewards (cash commission, free
+                    // kg, Ambassador) for a program built around encouraging
+                    // gas purchases they don't need.
                     $referrer = \App\Models\User::find($referrerUserId);
                     if ($referrer && $referrer->membership_tier === \App\Models\User::TIER_VVIP) {
                         $fail('This Customer ID belongs to a VVIP account, which can\'t refer other students.');
@@ -76,6 +76,7 @@ class AuthController extends Controller
                 'referred_by_customer_id' => $validated['referred_by_customer_id'] ?? null,
                 'otp_code' => $otp,
                 'otp_expires_at' => now()->addMinutes(10),
+                'otp_attempts' => 0,
             ]
         );
 
@@ -96,7 +97,18 @@ class AuthController extends Controller
 
         $pending = PendingRegistration::where('email', $validated['email'])->first();
 
+        // Caps how many codes an attacker can try against one pending
+        // signup — otherwise the 10-minute expiry is the only thing
+        // bounding the guessing window on a 6-digit OTP.
+        if ($pending && $pending->otp_attempts >= 5) {
+            throw ValidationException::withMessages([
+                'otp' => ['Too many incorrect attempts. Please request a new code.'],
+            ]);
+        }
+
         if (! $pending || $pending->otp_expires_at->isPast() || ! Hash::check($validated['otp'], $pending->otp_code)) {
+            $pending?->increment('otp_attempts');
+
             throw ValidationException::withMessages([
                 'otp' => ['That code is invalid or has expired. Please request a new one.'],
             ]);
@@ -140,12 +152,12 @@ class AuthController extends Controller
 
         $pending->delete();
 
-        // The referrer's coupon is granted only once — later, when this
-        // student either pays for a gas order of 3 kg+ or takes a
-        // subscription (see User::grantReferralRewardForGasOrder /
-        // ::grantReferralRewardForSubscription). Nothing to do here at
-        // registration; the student who used the code gets no discount
-        // themselves.
+        // The referrer's reward is granted only once — later, whichever
+        // this student reaches first: a paid gas order (see
+        // User::grantReferralRewardForGasOrder) or a delivered subscription
+        // refill (see User::grantReferralRewardForRefill, triggered from
+        // RefillController::update). Nothing to do here at registration;
+        // the student who used the code gets no reward themselves.
 
         $token = $user->createToken('auth_token')->plainTextToken;
 
@@ -173,6 +185,7 @@ class AuthController extends Controller
         $pending->update([
             'otp_code' => $otp,
             'otp_expires_at' => now()->addMinutes(10),
+            'otp_attempts' => 0,
         ]);
 
         Notification::route('mail', $pending->email)->notify(new RegistrationOtpNotification($otp));

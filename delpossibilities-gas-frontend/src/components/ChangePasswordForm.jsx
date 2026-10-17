@@ -21,6 +21,12 @@ function ChangePasswordForm({ token }) {
     e.preventDefault()
     setError('')
     setMessage('')
+
+    if (password !== passwordConfirmation) {
+      setError('New password and confirm password do not match.')
+      return
+    }
+
     setSaving(true)
 
     try {
@@ -46,7 +52,7 @@ function ChangePasswordForm({ token }) {
       setPassword('')
       setPasswordConfirmation('')
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setSaving(false)
     }

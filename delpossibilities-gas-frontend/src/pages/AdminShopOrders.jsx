@@ -6,6 +6,8 @@ import StatCard from '../components/StatCard'
 import EmptyState from '../components/EmptyState'
 import StatusBadge from '../StatusBadge'
 import ConfirmDialog from '../components/ConfirmDialog'
+import PaginationControls from '../components/PaginationControls'
+import { paginate } from '../pagination'
 
 const POLL_INTERVAL_MS = 30000
 
@@ -52,6 +54,8 @@ function AdminShopOrders({ token }) {
   const [updatingId, setUpdatingId] = useState(null)
   const [actionTarget, setActionTarget] = useState(null) // { productOrder, action: 'advance' | 'cancel' }
   const [submitting, setSubmitting] = useState(false)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(15)
 
   const fetchProductOrders = async () => {
     try {
@@ -66,7 +70,7 @@ function AdminShopOrders({ token }) {
       setProductOrders(Array.isArray(data) ? data : [])
       setError('')
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setLoading(false)
     }
@@ -84,6 +88,17 @@ function AdminShopOrders({ token }) {
     const list = statusTab === 'all' ? productOrders : productOrders.filter((po) => po.status === statusTab)
     return [...list].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
   }, [productOrders, statusTab])
+
+  const pageCount = Math.max(1, Math.ceil(visibleOrders.length / pageSize))
+  const pagedOrders = useMemo(
+    () => paginate(visibleOrders, Math.min(page, pageCount), pageSize),
+    [visibleOrders, page, pageCount, pageSize]
+  )
+
+  const handleStatusTabChange = (value) => {
+    setStatusTab(value)
+    setPage(1)
+  }
 
   const stats = useMemo(() => {
     const approved = productOrders.filter((po) => po.status === 'approved').length
@@ -116,7 +131,7 @@ function AdminShopOrders({ token }) {
 
       setProductOrders((prev) => prev.map((po) => (po.id === data.id ? { ...po, ...data } : po)))
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setUpdatingId(null)
       setSubmitting(false)
@@ -151,7 +166,7 @@ function AdminShopOrders({ token }) {
             type="button"
             role="radio"
             aria-checked={statusTab === tab.value}
-            onClick={() => setStatusTab(tab.value)}
+            onClick={() => handleStatusTabChange(tab.value)}
             className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
               statusTab === tab.value ? 'bg-white text-brand-navy shadow-sm' : 'text-slate-500 hover:text-slate-700'
             }`}
@@ -163,6 +178,7 @@ function AdminShopOrders({ token }) {
 
       {error && <p className="alert-error mb-6">{error}</p>}
 
+
       {loading && <div className="skeleton h-64 w-full" />}
 
       {!loading && visibleOrders.length === 0 && !error && (
@@ -171,7 +187,7 @@ function AdminShopOrders({ token }) {
 
       {!loading && visibleOrders.length > 0 && (
         <div className="flex flex-col gap-3">
-          {visibleOrders.map((po) => {
+          {pagedOrders.map((po) => {
             const nextStatus = NEXT_STATUS[po.status]
             const updating = updatingId === po.id
             const linked = !!(po.order || po.refill)
@@ -219,6 +235,17 @@ function AdminShopOrders({ token }) {
               </div>
             )
           })}
+
+          <PaginationControls
+            page={Math.min(page, pageCount)}
+            pageSize={pageSize}
+            total={visibleOrders.length}
+            onPageChange={(next) => setPage(Math.min(Math.max(1, next), pageCount))}
+            onPageSizeChange={(next) => {
+              setPageSize(next)
+              setPage(1)
+            }}
+          />
         </div>
       )}
 

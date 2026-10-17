@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { Scale, X, Equal } from 'lucide-react'
-import { apiFetch, formatNaira } from '../../api'
+import { formatNaira } from '../../api'
+import { publicFetch } from '../../publicData'
 import Reveal from '../motion/Reveal'
 
 const SAMPLE_KG = 12
@@ -15,7 +16,7 @@ function PricingPreview() {
   useEffect(() => {
     let cancelled = false
 
-    apiFetch('/price')
+    publicFetch('/price')
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (cancelled || !data) return
@@ -34,7 +35,7 @@ function PricingPreview() {
 
     // Off-campus delivery is zone-based (see DeliveryZoneSelect) rather than
     // a single flat fee — show the cheapest zone as a "from" figure.
-    apiFetch('/delivery-zones')
+    publicFetch('/delivery-zones')
       .then((res) => (res.ok ? res.json() : []))
       .then((zones) => {
         if (cancelled || !Array.isArray(zones) || zones.length === 0) return

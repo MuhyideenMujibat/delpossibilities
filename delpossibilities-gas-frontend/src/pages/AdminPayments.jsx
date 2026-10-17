@@ -58,7 +58,7 @@ function AdminPayments({ token }) {
         setOrders(sortByPaidAtDesc(list))
         setError('')
       } catch {
-        setError('Could not reach the server.')
+        setError('Check your internet connection.')
       } finally {
         setLoading(false)
       }
@@ -112,6 +112,7 @@ function AdminPayments({ token }) {
       </div>
 
       {error && <p className="alert-error mb-6">{error}</p>}
+
 
       {loading && <div className="skeleton h-64 w-full" />}
 

@@ -49,7 +49,7 @@ function Login({ setToken, setRole, setPermissions }) {
       const stored = takePostAuthRedirect()
       navigate(role === 'admin' || role === 'super_admin' ? '/admin' : from || stored || '/home', { replace: true })
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setSubmitting(false)
     }

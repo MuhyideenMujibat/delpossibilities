@@ -26,18 +26,20 @@ function daysAgo(days) {
 function buildDailySeries(orders, days) {
   const buckets = new Map()
   for (let i = days - 1; i >= 0; i -= 1) {
-    buckets.set(daysAgo(i), 0)
+    buckets.set(daysAgo(i), { revenue: 0, kg: 0 })
   }
 
   orders.forEach((order) => {
     if (!PAID_STATUSES.includes(order.status) || !order.created_at) return
     const key = isoDate(new Date(order.created_at))
     if (buckets.has(key)) {
-      buckets.set(key, buckets.get(key) + Number(order.total_amount || 0))
+      const bucket = buckets.get(key)
+      bucket.revenue += Number(order.total_amount || 0)
+      bucket.kg += Number(order.kg || 0)
     }
   })
 
-  return Array.from(buckets.entries()).map(([date, revenue]) => ({ date, revenue }))
+  return Array.from(buckets.entries()).map(([date, totals]) => ({ date, ...totals }))
 }
 
 function downloadCsv(orders) {
@@ -73,6 +75,11 @@ function AdminReports({ token }) {
   const [orders, setOrders] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  // 'daily' (a single admin-pickable date, defaulting to today) or 'days'
+  // (one of the RANGE_PRESETS below, counted back from now). Daily is the
+  // default so the page opens scoped to today, same as the Gas Orders page.
+  const [mode, setMode] = useState('daily')
+  const [dailyDate, setDailyDate] = useState(() => isoDate(new Date()))
   const [rangeDays, setRangeDays] = useState(30)
 
   useEffect(() => {
@@ -88,7 +95,7 @@ function AdminReports({ token }) {
         const data = await response.json()
         setOrders(Array.isArray(data) ? data : data.orders || data.data || [])
       } catch {
-        setError('Could not reach the server.')
+        setError('Check your internet connection.')
       } finally {
         setLoading(false)
       }
@@ -98,9 +105,10 @@ function AdminReports({ token }) {
   }, [token])
 
   const rangeFilters = useMemo(() => {
+    if (mode === 'daily') return { ...EMPTY_FILTERS, from: dailyDate, to: dailyDate }
     if (!rangeDays) return EMPTY_FILTERS
     return { ...EMPTY_FILTERS, from: daysAgo(rangeDays - 1) }
-  }, [rangeDays])
+  }, [mode, dailyDate, rangeDays])
 
   const rangeOrders = useMemo(() => filterOrders(orders, rangeFilters), [orders, rangeFilters])
 
@@ -162,12 +170,35 @@ function AdminReports({ token }) {
       />
 
       <div className="filter-bar">
+        <button
+          onClick={() => setMode('daily')}
+          className={`rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+            mode === 'daily' ? 'bg-brand-teal text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+          }`}
+        >
+          Daily
+        </button>
+
+        {mode === 'daily' && (
+          <input
+            type="date"
+            value={dailyDate}
+            max={isoDate(new Date())}
+            onChange={(e) => setDailyDate(e.target.value)}
+            className="filter-field sm:w-40"
+            aria-label="Pick a date"
+          />
+        )}
+
         {RANGE_PRESETS.map((preset) => (
           <button
             key={preset.label}
-            onClick={() => setRangeDays(preset.days)}
+            onClick={() => {
+              setMode('days')
+              setRangeDays(preset.days)
+            }}
             className={`rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-              rangeDays === preset.days ? 'bg-brand-teal text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              mode === 'days' && rangeDays === preset.days ? 'bg-brand-teal text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
             }`}
           >
             {preset.label}
@@ -179,6 +210,7 @@ function AdminReports({ token }) {
       </div>
 
       {error && <p className="alert-error mb-6">{error}</p>}
+
 
       {loading && <div className="skeleton h-64 w-full" />}
 
@@ -198,28 +230,30 @@ function AdminReports({ token }) {
           </div>
 
           <div className="mb-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
-            <div className="panel-card p-5 pt-7 lg:col-span-2">
-              <h3 className="mb-4 font-heading text-sm font-bold text-brand-navy">Daily revenue</h3>
-              <div className="flex h-40 gap-1">
-                {series.map((point) => (
-                  <div key={point.date} className="group relative flex-1">
-                    <div
-                      className="absolute inset-x-0 bottom-0 rounded-t bg-brand-teal/80 transition-colors group-hover:bg-brand-teal"
-                      style={{ height: `${Math.max(4, (point.revenue / seriesMax) * 100)}%` }}
-                    />
-                    <div className="figure pointer-events-none absolute -top-9 left-1/2 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-brand-navy px-2 py-1 text-[10px] text-white group-hover:block">
-                      {formatNaira(point.revenue)}
+            {mode === 'days' && (
+              <div className="panel-card p-5 pt-7 lg:col-span-2">
+                <h3 className="mb-4 font-heading text-sm font-bold text-brand-navy">Daily revenue</h3>
+                <div className="flex h-40 gap-1">
+                  {series.map((point) => (
+                    <div key={point.date} className="group relative flex-1">
+                      <div
+                        className="absolute inset-x-0 bottom-0 rounded-t bg-brand-teal/80 transition-colors group-hover:bg-brand-teal"
+                        style={{ height: `${Math.max(4, (point.revenue / seriesMax) * 100)}%` }}
+                      />
+                      <div className="figure pointer-events-none absolute -top-9 left-1/2 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-brand-navy px-2 py-1 text-[10px] text-white group-hover:block">
+                        {formatNaira(point.revenue)}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
+                <div className="eyebrow mt-2 flex justify-between text-[10px]">
+                  <span>{series[0]?.date}</span>
+                  <span>{series[series.length - 1]?.date}</span>
+                </div>
               </div>
-              <div className="eyebrow mt-2 flex justify-between text-[10px]">
-                <span>{series[0]?.date}</span>
-                <span>{series[series.length - 1]?.date}</span>
-              </div>
-            </div>
+            )}
 
-            <div className="panel-card p-5 pt-7">
+            <div className={`panel-card p-5 pt-7 ${mode === 'daily' ? 'lg:col-span-3' : ''}`}>
               <h3 className="mb-4 font-heading text-sm font-bold text-brand-navy">Orders by status</h3>
               <div className="flex flex-col gap-3">
                 {statusBreakdown.map((row) => (

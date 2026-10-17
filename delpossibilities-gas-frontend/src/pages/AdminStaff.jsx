@@ -33,7 +33,7 @@ function AdminStaff({ token }) {
       setPermissions(await permsRes.json())
       setError('')
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setLoading(false)
     }
@@ -78,7 +78,7 @@ function AdminStaff({ token }) {
       await fetchAll()
       cancelEdit()
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setSaving(false)
     }
@@ -100,7 +100,7 @@ function AdminStaff({ token }) {
       setStaff((prev) => prev.filter((s) => s.id !== deleteTarget.id))
       setDeleteTarget(null)
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setDeleting(false)
     }
@@ -121,6 +121,7 @@ function AdminStaff({ token }) {
       />
 
       {error && <p className="alert-error mb-6">{error}</p>}
+
 
       {loading && <div className="skeleton h-64 w-full" />}
 

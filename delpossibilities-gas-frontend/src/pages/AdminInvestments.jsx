@@ -1,9 +1,11 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { TrendingUp, CheckCircle2, XCircle, Download } from 'lucide-react'
 import { apiFetch, formatNaira, formatDate } from '../api'
 import PageHeader from '../components/PageHeader'
 import EmptyState from '../components/EmptyState'
 import ConfirmDialog from '../components/ConfirmDialog'
+import PaginationControls from '../components/PaginationControls'
+import { paginate } from '../pagination'
 import { useToast } from '../toastContext'
 
 const STATUS_OPTIONS = [
@@ -30,6 +32,8 @@ function InvestmentsTab({ token }) {
   const [actingId, setActingId] = useState(null)
   const [cancelTarget, setCancelTarget] = useState(null)
   const [cancelling, setCancelling] = useState(false)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(15)
 
   const fetchInvestments = async (statusFilter) => {
     setLoading(true)
@@ -42,7 +46,7 @@ function InvestmentsTab({ token }) {
       setInvestments(await response.json())
       setError('')
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setLoading(false)
     }
@@ -51,8 +55,15 @@ function InvestmentsTab({ token }) {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchInvestments(status)
+    setPage(1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, status])
+
+  const pageCount = Math.max(1, Math.ceil(investments.length / pageSize))
+  const visibleInvestments = useMemo(
+    () => paginate(investments, Math.min(page, pageCount), pageSize),
+    [investments, page, pageCount, pageSize]
+  )
 
   const handleConfirmPayment = async (investment) => {
     setActingId(investment.id)
@@ -66,7 +77,7 @@ function InvestmentsTab({ token }) {
       setInvestments((prev) => prev.filter((inv) => inv.id !== investment.id || status === 'all'))
       show('Payment confirmed — contract generated.', { type: 'success' })
     } catch {
-      show('Could not reach the server.', { type: 'error' })
+      show('Check your internet connection.', { type: 'error' })
     } finally {
       setActingId(null)
     }
@@ -86,7 +97,7 @@ function InvestmentsTab({ token }) {
       setCancelTarget(null)
       show('Investment cancelled.', { type: 'success' })
     } catch {
-      show('Could not reach the server.', { type: 'error' })
+      show('Check your internet connection.', { type: 'error' })
     } finally {
       setCancelling(false)
     }
@@ -111,6 +122,7 @@ function InvestmentsTab({ token }) {
 
       {error && <p className="alert-error mb-4">{error}</p>}
 
+
       {loading && <div className="skeleton h-40 w-full" />}
 
       {!loading && investments.length === 0 && (
@@ -119,7 +131,7 @@ function InvestmentsTab({ token }) {
 
       {!loading && investments.length > 0 && (
         <div className="flex flex-col gap-3">
-          {investments.map((investment) => (
+          {visibleInvestments.map((investment) => (
             <div key={investment.id} className="card">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
@@ -165,6 +177,17 @@ function InvestmentsTab({ token }) {
               </div>
             </div>
           ))}
+
+          <PaginationControls
+            page={Math.min(page, pageCount)}
+            pageSize={pageSize}
+            total={investments.length}
+            onPageChange={(next) => setPage(Math.min(Math.max(1, next), pageCount))}
+            onPageSizeChange={(next) => {
+              setPageSize(next)
+              setPage(1)
+            }}
+          />
         </div>
       )}
 

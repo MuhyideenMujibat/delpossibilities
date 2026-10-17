@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Product;
+use App\Support\CatalogCache;
 use Illuminate\Http\Request;
 
 class ProductController extends Controller
@@ -26,6 +27,8 @@ class ProductController extends Controller
             $query->where('category', $request->string('category'));
         }
 
-        return response()->json($query->get());
+        $key = 'products.'.$request->input('group', 'all').'.'.$request->input('category', 'all');
+
+        return response()->json(CatalogCache::remember($key, fn () => $query->get()));
     }
 }

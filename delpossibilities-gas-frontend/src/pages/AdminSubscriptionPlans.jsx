@@ -219,7 +219,7 @@ function AdminSubscriptionPlans({ token, isSuperAdmin = false }) {
         { type: 'success' }
       )
     } catch {
-      show('Could not reach the server.', { type: 'error' })
+      show('Check your internet connection.', { type: 'error' })
     } finally {
       setSaving(false)
       setPendingPlan(null)
@@ -258,6 +258,7 @@ function AdminSubscriptionPlans({ token, isSuperAdmin = false }) {
           </button>
         ))}
       </div>
+
 
       {loading && <div className="skeleton h-64 w-full" />}
 

@@ -157,7 +157,7 @@ function FeedbackWidget({ token }) {
       setSubmitted(true)
       setTimeout(resetAndClose, 2200)
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setSubmitting(false)
     }

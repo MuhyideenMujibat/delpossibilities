@@ -16,6 +16,8 @@ class ProductOrder extends Model
         'location_type',
         'status',
         'paystack_reference',
+        'payment_gateway',
+        'flutterwave_tx_ref',
         'payment_authorization_url',
         'paid_at',
     ];

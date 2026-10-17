@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { Minus, Plus, ShoppingCart } from 'lucide-react'
-import { apiFetch, formatNaira, resolveImageUrl } from '../../api'
+import { formatNaira, resolveImageUrl } from '../../api'
+import { publicFetch, peekPublicData } from '../../publicData'
 import { useCart } from '../../cartContext'
 import { useToast } from '../../toastContext'
 import Reveal, { RevealItem } from '../motion/Reveal'
@@ -45,7 +46,7 @@ function ProductCard({ product }) {
       className="card flex flex-col p-4"
     >
       {product.image_url ? (
-        <img src={resolveImageUrl(product.image_url)} alt={product.name} className="mb-3 h-28 w-full rounded-lg object-cover sm:h-32" />
+        <img src={resolveImageUrl(product.image_url)} alt={product.name} width={640} height={112} loading="lazy" decoding="async" className="mb-3 h-28 w-full rounded-lg object-cover sm:h-32" />
       ) : (
         <div className="mb-3 flex h-28 w-full items-center justify-center rounded-lg bg-slate-100 text-xs text-slate-400 sm:h-32">
           No image
@@ -143,8 +144,8 @@ function ProductCard({ product }) {
 //             3-up (2-up on mobile) so it stays readable inside the narrow
 //             AddToDeliveryModal and wraps/scrolls instead of overflowing.
 function ShopSection({ group, title, subtitle, icon: Icon, tone = 'white', variant = 'page' }) {
-  const [products, setProducts] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [products, setProducts] = useState(() => peekPublicData(`/products?group=${group}`) || [])
+  const [loading, setLoading] = useState(() => !peekPublicData(`/products?group=${group}`))
   const [categoryFilter, setCategoryFilter] = useState('all')
 
   const isModal = variant === 'modal'
@@ -152,7 +153,7 @@ function ShopSection({ group, title, subtitle, icon: Icon, tone = 'white', varia
   useEffect(() => {
     let cancelled = false
 
-    apiFetch(`/products?group=${group}`)
+    publicFetch(`/products?group=${group}`)
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => {
         if (!cancelled) setProducts(Array.isArray(data) ? data : [])

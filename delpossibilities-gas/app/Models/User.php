@@ -23,6 +23,22 @@ class User extends Authenticatable
     // Setting::referralDiscountPercent).
     public const REFERRAL_DISCOUNT_PERCENT = 10;
 
+    // How much free gas (kg) is credited to referral_free_kg_balance each
+    // calendar month a referrer hits the 10-distinct-referrers+30kg milestone
+    // (see evaluateMonthlyReferralMilestone). Not admin-configurable — the
+    // request specifically asked for "free 3kg", unlike the cash commission
+    // and old referral percent, which are.
+    public const REFERRAL_FREE_KG_REWARD = 3;
+
+    // Fallback defaults for the monthly milestone (see
+    // evaluateMonthlyReferralMilestone) when the admin hasn't set
+    // Setting::referral_milestone_referred_count / ::referral_milestone_kg —
+    // both are admin-editable (see Setting::referralMilestoneReferredCount /
+    // ::referralMilestoneKg), these constants only cover the unconfigured case.
+    public const REFERRAL_MILESTONE_REFERRED_COUNT = 10;
+
+    public const REFERRAL_MILESTONE_KG = 30;
+
     // The three membership_tier values a student account can hold — 'none'
     // is the plain default, set by an admin only at account creation (see
     // AdminUserController::store). 'vip' and 'vvip' are never valid for an
@@ -53,6 +69,16 @@ class User extends Authenticatable
         'referred_by_user_id',
         'referral_reward_granted',
         'referral_discount_percent_available',
+        'referral_commission_balance',
+        'referral_free_kg_balance',
+        'referral_cycle_kg',
+        'referral_cycle_friends_count',
+        'is_brand_ambassador',
+        'brand_ambassador_since',
+        'referral_commission_granted',
+        'referral_commission_kg',
+        'referral_free_kg_month',
+        'referral_free_kg_month_used',
     ];
 
     protected $appends = [
@@ -85,6 +111,15 @@ class User extends Authenticatable
             'loyalty_progress_kg' => 'decimal:2',
             'referral_reward_granted' => 'boolean',
             'referral_discount_percent_available' => 'decimal:2',
+            'referral_commission_balance' => 'decimal:2',
+            'referral_free_kg_balance' => 'decimal:2',
+            'referral_cycle_kg' => 'decimal:2',
+            'referral_cycle_friends_count' => 'integer',
+            'is_brand_ambassador' => 'boolean',
+            'brand_ambassador_since' => 'datetime',
+            'referral_commission_granted' => 'boolean',
+            'referral_commission_kg' => 'decimal:2',
+            'referral_free_kg_month_used' => 'decimal:2',
         ];
     }
 
@@ -175,61 +210,228 @@ class User extends Authenticatable
         );
     }
 
-    // Called from the paid-gas-order side effects (OrderController::verify and
-    // PaystackWebhookController) — gates the gas-order trigger on 3 kg or
-    // more before handing off to the shared grant below.
-    public function grantReferralRewardForGasOrder(float $orderKg): void
+    // Called from every paid-gas-order side effect (OrderController::verify,
+    // FlutterwaveController, FlutterwaveWebhookController,
+    // PaystackWebhookController) — this is $order->user, the REFERRED student,
+    // not the referrer. No kg minimum: whatever this order's kg is gets
+    // passed straight into the shared one-shot grant below.
+    public function grantReferralRewardForGasOrder(Order $order): void
     {
-        if ($orderKg < 3) {
-            return;
-        }
-
-        $this->grantReferralReward();
+        $this->grantReferralCommissionOnce((float) $order->kg);
     }
 
-    // Called from the subscription-activation side effects (Subscriber::activate,
-    // reached via both SubscriberController::verifyPayment and
-    // PaystackWebhookController). A subscription isn't measured in kg, so it
-    // counts on its own — no threshold to clear, unlike a plain gas order.
-    public function grantReferralRewardForSubscription(): void
+    // Called from RefillController::update, the moment a refill is marked
+    // 'delivered' (the only point a subscription-backed refill has a real,
+    // finalized kg — there's no payment step to hang this on the way a gas
+    // order has, see Refill model). NOT called at subscription activation:
+    // if a referred student's subscription is what ends up qualifying them,
+    // it's specifically their FIRST delivered refill's kg that counts, same
+    // as a plain gas order's kg would — kg_delivered, not kg_requested,
+    // since that's what's actually left the admin's stock (and matches what
+    // draws down the subscriber's remaining_kg, see RefillController::update).
+    public function grantReferralRewardForRefill(Refill $refill): void
     {
-        $this->grantReferralReward();
+        $this->grantReferralCommissionOnce((float) $refill->kg_delivered);
     }
 
-    // Shared grant: adds Setting::referral_discount_percent (see
-    // Setting::referralDiscountPercent) straight onto the referrer's
-    // running percent balance — once per referred student, whichever
-    // qualifying event (a 3 kg+ gas order, or a subscription) they reach
-    // first. The referral_reward_granted flag on this (the referred) user
-    // keeps it idempotent across both trigger points and any retries.
-    // Eazy Market-only orders don't count toward either trigger. Referring
-    // several students stacks: two referrals at 70% each puts 140% on the
-    // balance — an order only ever spends up to 100% of it (see
-    // OrderController::store), so the other 40% stays on the balance
-    // rather than being thrown away with the "used" coupon it came from.
-    private function grantReferralReward(): void
+    // Fires AT MOST ONCE per referred student (this user) — on whichever
+    // qualifying event (a paid gas order or a subscription) they reach
+    // FIRST. referral_commission_granted is that one-shot gate: once set, a
+    // second order, a subscription after an order, or vice versa, adds
+    // nothing further — no more cash commission, no more kg/friend
+    // contribution toward the referrer's cycle. This is the "per referred
+    // person, not per order" shape the program is meant to have; it mirrors
+    // the legacy referral_reward_granted flag's own one-shot design, just as
+    // its own column so that older flag (and the percent balances it
+    // produced) stay untouched/grandfathered.
+    //
+    // Cash commission: a flat ₦ amount (Setting::referralCommissionAmount,
+    // defaults to 0 = nothing granted until admin sets one) added to the
+    // referrer's referral_commission_balance — not spendable on orders, paid
+    // out by admin outside the app.
+    //
+    // Cycle contribution: referral_cycle_friends_count always goes up by
+    // exactly 1 (this referred student, counted once, ever); referral_cycle_kg
+    // goes up by $kg (0 for a subscription). The moment both hit their
+    // admin-configured targets (see checkReferralCycleCompletion), the cycle
+    // completes.
+    private function grantReferralCommissionOnce(float $kg): void
     {
-        if (! $this->referred_by_user_id || $this->referral_reward_granted) {
+        if (! $this->referred_by_user_id || $this->referral_commission_granted) {
             return;
         }
 
         $referrer = static::find($this->referred_by_user_id);
 
-        // A VVIP referrer never pays for gas in the first place, so a
-        // percent-off-gas coupon is worthless to them — see the
-        // referred_by_customer_id validation in AuthController::register,
-        // which already blocks a VVIP account's Customer ID from being used
-        // as a referral link. This is just defense in depth for the rare
-        // case a referrer is promoted to VVIP after already referring
-        // someone — left ungranted (not marked as spent) so a genuine
-        // future qualifying event can still pay out if they're ever
-        // demoted back off VVIP.
-        if (! $referrer || $referrer->membership_tier === self::TIER_VVIP) {
+        if (! $referrer) {
             return;
         }
 
-        $referrer->increment('referral_discount_percent_available', Setting::current()->referralDiscountPercent());
-        $this->update(['referral_reward_granted' => true]);
+        $amount = Setting::current()->referralCommissionAmount();
+
+        if ($amount > 0) {
+            $referrer->increment('referral_commission_balance', $amount);
+        }
+
+        $referrer->increment('referral_cycle_friends_count');
+        $referrer->increment('referral_cycle_kg', $kg);
+        $referrer->refresh();
+
+        // Snapshotted here (on THIS, the referred user) rather than derived
+        // later from order history — the admin referral leaderboard sums
+        // this per referrer for "lifetime kg earned" (see
+        // AdminReferralController::index), and re-deriving it from orders
+        // would wrongly include orders placed after this one-shot grant,
+        // which don't contribute anything further.
+        $this->update([
+            'referral_commission_granted' => true,
+            'referral_commission_kg' => $kg,
+        ]);
+
+        $this->checkReferralCycleCompletion($referrer);
+    }
+
+    // The distinct-referred-friends + combined-kg milestone (both thresholds
+    // admin-editable, see Setting::referralMilestoneReferredCount /
+    // ::referralMilestoneKg) — a CONTINUOUS running cycle, same shape as
+    // loyalty_progress_kg, not calendar-bound. The moment BOTH targets are
+    // met, the cycle completes: free kg is granted, then both counters
+    // reset — but only by exactly the target amount, so any overflow beyond
+    // the target carries forward into the new cycle as a head start, instead
+    // of being thrown away. Brand Ambassador status is NOT granted here —
+    // that's now a manual admin decision (see AdminReferralController),
+    // informed by the leaderboard this cycle data feeds.
+    private function checkReferralCycleCompletion(User $referrer): void
+    {
+        $setting = Setting::current();
+        $friendsTarget = $setting->referralMilestoneReferredCount();
+        $kgTarget = $setting->referralMilestoneKg();
+
+        if ($referrer->referral_cycle_friends_count < $friendsTarget || (float) $referrer->referral_cycle_kg < $kgTarget) {
+            return;
+        }
+
+        // Cycle complete — log it and grant the free kg before resetting.
+        ReferralMonthlyReward::create([
+            'user_id' => $referrer->id,
+            'distinct_referred_count' => $referrer->referral_cycle_friends_count,
+            'total_kg' => $referrer->referral_cycle_kg,
+            'free_kg_amount' => self::REFERRAL_FREE_KG_REWARD,
+            'completed_at' => now(),
+        ]);
+
+        $referrer->increment('referral_free_kg_balance', self::REFERRAL_FREE_KG_REWARD);
+
+        // Reset, carrying forward only the overflow beyond each target —
+        // exactly at target leaves nothing to carry (resets to 0), same as
+        // completing a loyalty threshold exactly.
+        $overflowKg = round((float) $referrer->referral_cycle_kg - $kgTarget, 2);
+        $overflowFriends = (int) $referrer->referral_cycle_friends_count - $friendsTarget;
+
+        $referrer->update([
+            'referral_cycle_kg' => max($overflowKg, 0),
+            'referral_cycle_friends_count' => max($overflowFriends, 0),
+        ]);
+    }
+
+    // The other side of referred_by_user_id — every account this user has
+    // referred, successful or not (see successfulReferralsCount below for
+    // the ones that actually paid out).
+    public function referrals()
+    {
+        return $this->hasMany(User::class, 'referred_by_user_id');
+    }
+
+    // How many of this user's referrals qualified under the OLD, now-frozen
+    // percent mechanic (a legacy, grandfathered flag — nothing sets it any
+    // more, see grantReferralCommissionOnce for what counts today) and so
+    // contributed to referral_discount_percent_available. Shown to the
+    // referrer alongside their available balance (see Profile.jsx) so
+    // "you have 20% available" reads as "3 referrals earned you this".
+    // Not in $appends for the same reason is_investor isn't — this runs a
+    // query per user, fine for the single /user response, wrong for a bulk
+    // list (see AdminStudentController::index).
+    protected function successfulReferralsCount(): Attribute
+    {
+        return Attribute::make(
+            get: fn () => $this->referrals()->where('referral_reward_granted', true)->count(),
+        );
+    }
+
+    // History of this referrer's completed referral cycles (see
+    // evaluateReferralCycleProgress) — one row every time they hit the
+    // friends+kg milestone, not calendar-bound.
+    public function referralMonthlyRewards()
+    {
+        return $this->hasMany(ReferralMonthlyReward::class);
+    }
+
+    // The CURRENT open cycle's running standing (see
+    // evaluateReferralCycleProgress) — just reads the stored counters
+    // directly, no query, since they're incremented/reset in real time
+    // rather than computed on demand. Shown on the profile page as a
+    // progress bar before the cycle's reward is actually earned. Not in
+    // global $appends for consistency with the other per-user computed
+    // attributes here; opted into explicitly by the GET /user route.
+    protected function referralMonthlyProgress(): Attribute
+    {
+        return Attribute::make(
+            get: function () {
+                $setting = Setting::current();
+
+                return [
+                    'distinct_referred' => (int) $this->referral_cycle_friends_count,
+                    'total_kg' => (float) $this->referral_cycle_kg,
+                    'distinct_referred_target' => $setting->referralMilestoneReferredCount(),
+                    'total_kg_target' => $setting->referralMilestoneKg(),
+                ];
+            },
+        );
+    }
+
+    // How much of the 3kg-per-calendar-month free-kg SPENDING cap is still
+    // available right now (see OrderController::referralFreeKgDiscount,
+    // which this mirrors exactly) — lets CreateOrder.jsx preview the real
+    // cap client-side instead of promising a discount the backend would
+    // reject. A stale stored month is treated as 0 used so far, same as
+    // the backend. Not in global $appends, opted into by GET /user.
+    protected function referralFreeKgMonthRemaining(): Attribute
+    {
+        return Attribute::make(
+            get: function () {
+                $monthUsed = $this->referral_free_kg_month === now()->format('Y-m')
+                    ? (float) $this->referral_free_kg_month_used
+                    : 0.0;
+
+                return max(self::REFERRAL_FREE_KG_REWARD - $monthUsed, 0);
+            },
+        );
+    }
+
+    // Computes how much of $baseAmount this user's
+    // referral_discount_percent_available balance would discount, without
+    // touching the balance — the caller decides whether/when to actually
+    // decrement (see OrderController::store's own inline version, and
+    // SubscriberController::store, which both need to fold the discount
+    // into a price before committing to spend it). Mirrors
+    // OrderController's referral maths exactly: at most 100% of
+    // $baseAmount is spent per call, any balance beyond that stays on the
+    // account for a future order or subscription.
+    public function previewReferralDiscount(float $baseAmount): array
+    {
+        $discountAmount = 0.0;
+        $percentUsed = 0.0;
+
+        if ($baseAmount > 0) {
+            $percentAvailable = (float) $this->referral_discount_percent_available;
+
+            if ($percentAvailable > 0) {
+                $percentUsed = min($percentAvailable, 100.0);
+                $discountAmount = round($baseAmount * ($percentUsed / 100), 2);
+            }
+        }
+
+        return [$discountAmount, $percentUsed];
     }
 
     public function notifications()
@@ -265,7 +467,7 @@ class User extends Authenticatable
     {
         return Attribute::make(
             get: function () {
-                $setting = Setting::current();
+                $setting = Setting::forSerialization();
 
                 if (! $setting->loyaltyActive()) {
                     return false;
@@ -283,7 +485,7 @@ class User extends Authenticatable
     {
         return Attribute::make(
             get: function () {
-                $setting = Setting::current();
+                $setting = Setting::forSerialization();
 
                 if (! $setting->loyaltyActive()) {
                     return null;
@@ -325,7 +527,12 @@ class User extends Authenticatable
         return Attribute::make(
             get: fn () => $this->role === 'super_admin'
                 ? Permission::pluck('key')->values()
-                : $this->permissions()->pluck('key')->values(),
+                // Uses the eager-loaded relation when a list endpoint
+                // loaded it (->with('user.permissions')), so serializing N
+                // users costs one query instead of N. Same result either way.
+                : ($this->relationLoaded('permissions')
+                    ? $this->permissions->pluck('key')->values()
+                    : $this->permissions()->pluck('key')->values()),
         );
     }
 }

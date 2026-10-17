@@ -5,6 +5,8 @@ import PageHeader from '../components/PageHeader'
 import StatCard from '../components/StatCard'
 import EmptyState from '../components/EmptyState'
 import ConfirmDialog from '../components/ConfirmDialog'
+import PaginationControls from '../components/PaginationControls'
+import { paginate } from '../pagination'
 
 const POLL_INTERVAL_MS = 30000
 
@@ -64,7 +66,7 @@ function CylinderThumb({ refill }) {
   }
   return (
     <a href={src} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
-      <img src={src} alt="Cylinder" className="h-10 w-10 rounded-lg object-cover ring-1 ring-slate-200 hover:ring-brand-teal" />
+      <img src={src} alt="Cylinder" width={40} height={40} loading="lazy" decoding="async" className="h-10 w-10 rounded-lg object-cover ring-1 ring-slate-200 hover:ring-brand-teal" />
     </a>
   )
 }
@@ -193,6 +195,8 @@ function AdminRefills({ token }) {
   // Refill ids whose attached shop-order breakdown is expanded (click the
   // "View shop" badge on a row to toggle).
   const [expandedShop, setExpandedShop] = useState(() => new Set())
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(15)
 
   const toggleShop = (id) =>
     setExpandedShop((prev) => {
@@ -215,7 +219,7 @@ function AdminRefills({ token }) {
       setRefills(Array.isArray(data) ? data : [])
       setError('')
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setLoading(false)
     }
@@ -233,6 +237,17 @@ function AdminRefills({ token }) {
     const list = statusTab === 'all' ? refills : refills.filter((r) => r.status === statusTab)
     return [...list].sort((a, b) => new Date(b.requested_at) - new Date(a.requested_at))
   }, [refills, statusTab])
+
+  const pageCount = Math.max(1, Math.ceil(visibleRefills.length / pageSize))
+  const pagedRefills = useMemo(
+    () => paginate(visibleRefills, Math.min(page, pageCount), pageSize),
+    [visibleRefills, page, pageCount, pageSize]
+  )
+
+  const handleStatusTabChange = (value) => {
+    setStatusTab(value)
+    setPage(1)
+  }
 
   const stats = useMemo(() => {
     const pending = refills.filter((r) => r.status === 'pending').length
@@ -271,7 +286,7 @@ function AdminRefills({ token }) {
         prev.map((r) => (r.id === updated.id ? { ...r, ...updated, subscriber: { ...r.subscriber, ...updated.subscriber } } : r))
       )
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setUpdatingId(null)
       setSubmitting(false)
@@ -302,7 +317,7 @@ function AdminRefills({ token }) {
             type="button"
             role="radio"
             aria-checked={statusTab === tab.value}
-            onClick={() => setStatusTab(tab.value)}
+            onClick={() => handleStatusTabChange(tab.value)}
             className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
               statusTab === tab.value ? 'bg-white text-brand-navy shadow-sm' : 'text-slate-500 hover:text-slate-700'
             }`}
@@ -313,6 +328,7 @@ function AdminRefills({ token }) {
       </div>
 
       {error && <p className="alert-error mb-6">{error}</p>}
+
 
       {loading && <div className="skeleton h-64 w-full" />}
 
@@ -340,7 +356,7 @@ function AdminRefills({ token }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {visibleRefills.map((refill) => {
+              {pagedRefills.map((refill) => {
                 const nextStatus = NEXT_STATUS[refill.status]
                 const updating = updatingId === refill.id
 
@@ -419,7 +435,7 @@ function AdminRefills({ token }) {
 
         {/* table-card is desktop-only — phone view of the same rows. */}
         <div className="flex flex-col gap-3 md:hidden">
-          {visibleRefills.map((refill) => {
+          {pagedRefills.map((refill) => {
             const nextStatus = NEXT_STATUS[refill.status]
             const updating = updatingId === refill.id
             return (
@@ -482,6 +498,17 @@ function AdminRefills({ token }) {
             )
           })}
         </div>
+
+        <PaginationControls
+          page={Math.min(page, pageCount)}
+          pageSize={pageSize}
+          total={visibleRefills.length}
+          onPageChange={(next) => setPage(Math.min(Math.max(1, next), pageCount))}
+          onPageSizeChange={(next) => {
+            setPageSize(next)
+            setPage(1)
+          }}
+        />
         </>
       )}
 

@@ -3,9 +3,11 @@
 namespace App\Http\Controllers;
 
 use App\Models\Order;
+use App\Models\ProductOrder;
 use App\Models\Setting;
 use App\Models\Subscriber;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -50,7 +52,7 @@ class FlutterwaveController extends Controller
         $txRef = 'order_'.$order->id.'_'.Str::random(10);
 
         try {
-            $response = Http::withToken(config('services.flutterwave.secret_key'))
+            $response = Http::withToken(config('services.flutterwave.secret_key'))->timeout(10)
                 ->post('https://api.flutterwave.com/v3/payments', [
                     'tx_ref' => $txRef,
                     // Server-side amount, never trust the frontend — same
@@ -146,16 +148,36 @@ class FlutterwaveController extends Controller
         }
 
         if ($flutterwaveStatus === 'successful') {
-            $order->update(['status' => 'approved', 'paid_at' => now()]);
-            $order->notifyStatusChange();
-            $order->applyLoyaltyProgress();
+            // Locked and re-checked inside a transaction — this call can
+            // race the Flutterwave webhook hitting the same order (see
+            // FlutterwaveWebhookController::handleOrderPayment).
+            $approved = DB::transaction(function () use ($order) {
+                $locked = Order::withTrashed()->whereKey($order->id)->lockForUpdate()->first();
 
-            if ($order->productOrder?->status === 'pending') {
-                $order->productOrder->update(['status' => 'approved', 'paid_at' => $order->paid_at]);
+                if ($locked->status !== 'pending') {
+                    return null;
+                }
+
+                $locked->update(['status' => 'approved', 'paid_at' => now()]);
+                // Undoes an admin's soft delete the moment this order is
+                // actually paid for — safe to call even if it was never
+                // trashed (see OrderController::destroy).
+                $locked->restore();
+
+                if ($locked->productOrder?->status === 'pending') {
+                    $locked->productOrder->update(['status' => 'approved', 'paid_at' => $locked->paid_at]);
+                }
+
+                return $locked;
+            });
+
+            if ($approved) {
+                $approved->notifyStatusChange();
+                $approved->applyLoyaltyProgress();
+                $approved->applyReferralFreeKg();
+                $approved->user->grantReferralRewardForGasOrder($approved);
+                $approved->sendReceiptEmail();
             }
-
-            $order->user->grantReferralRewardForGasOrder((float) $order->kg);
-            $order->sendReceiptEmail();
         }
 
         $loyalty = array_merge(
@@ -167,6 +189,146 @@ class FlutterwaveController extends Controller
             'order' => $order->fresh(),
             'flutterwave_status' => $flutterwaveStatus,
             'loyalty' => $loyalty,
+        ]);
+    }
+
+    // Standalone shop-order checkout — Flutterwave counterpart to
+    // ProductOrderController::pay/verifyPayment (a bundled cart never gets
+    // here, the gas order's own payment covers it).
+    public function payProductOrder(Request $request, ProductOrder $productOrder)
+    {
+        $user = $request->user();
+
+        if ($productOrder->user_id !== $user->id) {
+            abort(403, 'This order does not belong to you.');
+        }
+
+        if ($productOrder->status !== 'pending') {
+            throw ValidationException::withMessages([
+                'status' => ['This order has already been paid for or handled.'],
+            ]);
+        }
+
+        // Same rule as ProductOrderController::pay: Eazy Market items can't
+        // ship alone unless the buyer has a usable subscription to ride on.
+        $isActiveSubscriber = $user->subscribers()->usable()->exists();
+        if (! $isActiveSubscriber && $productOrder->loadMissing('items')->isEazyMarketOnly()) {
+            throw ValidationException::withMessages([
+                'items' => ['Eazy Market items need a gas accessory in the same cart, or to be attached to a gas refill — they can\'t be delivered on their own.'],
+            ]);
+        }
+
+        if (! Setting::current()->flutterwave_enabled) {
+            return response()->json([
+                'message' => 'Flutterwave is not currently available. Please choose another payment option.',
+            ], 422);
+        }
+
+        if ($productOrder->flutterwave_tx_ref && $productOrder->payment_authorization_url && $productOrder->payment_gateway === 'flutterwave') {
+            return response()->json([
+                'authorization_url' => $productOrder->payment_authorization_url,
+                'tx_ref' => $productOrder->flutterwave_tx_ref,
+            ]);
+        }
+
+        $txRef = 'product_order_'.$productOrder->id.'_'.Str::random(10);
+
+        try {
+            $response = Http::withToken(config('services.flutterwave.secret_key'))->timeout(10)
+                ->post('https://api.flutterwave.com/v3/payments', [
+                    'tx_ref' => $txRef,
+                    'amount' => (float) $productOrder->total_amount,
+                    'currency' => 'NGN',
+                    'redirect_url' => config('services.flutterwave.callback_url'),
+                    'customer' => [
+                        'email' => $user->email,
+                        'name' => $user->name,
+                    ],
+                    'customizations' => [
+                        'title' => config('app.name'),
+                    ],
+                ]);
+        } catch (\Illuminate\Http\Client\ConnectionException $e) {
+            Log::error('Flutterwave connection error: '.$e->getMessage());
+
+            return response()->json([
+                'message' => 'Unable to reach the payment provider. Please try again shortly.',
+            ], 500);
+        }
+
+        if (! $response->successful() || $response->json('status') !== 'success') {
+            Log::error('Flutterwave initialize transaction failed', [
+                'product_order_id' => $productOrder->id,
+                'response' => $response->json(),
+            ]);
+
+            return response()->json([
+                'message' => 'Unable to initialize payment. Please try again shortly.',
+            ], 500);
+        }
+
+        $authorizationUrl = $response->json('data.link');
+
+        $productOrder->update([
+            'flutterwave_tx_ref' => $txRef,
+            'payment_gateway' => 'flutterwave',
+            'payment_authorization_url' => $authorizationUrl,
+        ]);
+
+        return response()->json([
+            'authorization_url' => $authorizationUrl,
+            'tx_ref' => $txRef,
+        ]);
+    }
+
+    public function verifyProductOrderPayment(Request $request, ProductOrder $productOrder)
+    {
+        $user = $request->user();
+
+        if ($productOrder->user_id !== $user->id) {
+            abort(403, 'This order does not belong to you.');
+        }
+
+        if ($productOrder->status !== 'pending') {
+            return response()->json(['product_order' => $productOrder, 'flutterwave_status' => 'successful']);
+        }
+
+        if (! $productOrder->flutterwave_tx_ref) {
+            throw ValidationException::withMessages([
+                'status' => ['No payment has been started for this order yet.'],
+            ]);
+        }
+
+        $validated = $request->validate([
+            'transaction_id' => ['required', 'string'],
+        ]);
+
+        [$flutterwaveStatus, $errorResponse] = $this->verifyTransaction(
+            $validated['transaction_id'],
+            $productOrder->flutterwave_tx_ref,
+            (float) $productOrder->total_amount,
+            'product_order',
+            $productOrder->id
+        );
+
+        if ($errorResponse) {
+            return $errorResponse;
+        }
+
+        if ($flutterwaveStatus === 'successful') {
+            // Locked and re-checked — can race the webhook hitting the same cart.
+            DB::transaction(function () use ($productOrder) {
+                $locked = ProductOrder::whereKey($productOrder->id)->lockForUpdate()->first();
+
+                if ($locked->status === 'pending') {
+                    $locked->update(['status' => 'approved', 'paid_at' => now()]);
+                }
+            });
+        }
+
+        return response()->json([
+            'product_order' => $productOrder->fresh(['items', 'refill', 'attachingRefill', 'order', 'attachingOrder']),
+            'flutterwave_status' => $flutterwaveStatus,
         ]);
     }
 
@@ -211,10 +373,12 @@ class FlutterwaveController extends Controller
         $txRef = 'subscription_'.$subscriber->id.'_'.Str::random(10);
 
         try {
-            $response = Http::withToken(config('services.flutterwave.secret_key'))
+            $response = Http::withToken(config('services.flutterwave.secret_key'))->timeout(10)
                 ->post('https://api.flutterwave.com/v3/payments', [
                     'tx_ref' => $txRef,
-                    'amount' => (float) $subscriber->locked_price,
+                    // total_amount, not locked_price — the actual charge
+                    // after any referral discount (see SubscriberController::store).
+                    'amount' => (float) $subscriber->total_amount,
                     'currency' => 'NGN',
                     'redirect_url' => config('services.flutterwave.callback_url'),
                     'customer' => [
@@ -247,7 +411,7 @@ class FlutterwaveController extends Controller
         $authorizationUrl = $response->json('data.link');
 
         $subscriber->payments()->create([
-            'amount' => $subscriber->locked_price,
+            'amount' => $subscriber->total_amount,
             'flutterwave_tx_ref' => $txRef,
             'payment_authorization_url' => $authorizationUrl,
             'method' => 'flutterwave',
@@ -299,9 +463,19 @@ class FlutterwaveController extends Controller
         $activationMessage = null;
 
         if ($flutterwaveStatus === 'successful') {
-            $subscriber->load('plan');
             try {
-                $subscriber->activate($payment);
+                // Locked and re-checked inside a transaction — this call can
+                // race the Flutterwave webhook activating the same
+                // subscriber (see
+                // FlutterwaveWebhookController::handleSubscriptionPayment).
+                DB::transaction(function () use ($subscriber, $payment) {
+                    $locked = Subscriber::whereKey($subscriber->id)->lockForUpdate()->first();
+                    $locked->load('plan');
+
+                    if ($locked->status === 'pending') {
+                        $locked->activate($payment);
+                    }
+                });
             } catch (\RuntimeException $e) {
                 $activationMessage = 'Your payment was received, but subscriptions are not open yet — please check back shortly.';
             }
@@ -324,7 +498,7 @@ class FlutterwaveController extends Controller
     private function verifyTransaction(string $transactionId, string $expectedTxRef, float $expectedAmount, string $subjectType, int $subjectId): array
     {
         try {
-            $response = Http::withToken(config('services.flutterwave.secret_key'))
+            $response = Http::withToken(config('services.flutterwave.secret_key'))->timeout(10)
                 ->get("https://api.flutterwave.com/v3/transactions/{$transactionId}/verify");
         } catch (\Illuminate\Http\Client\ConnectionException $e) {
             Log::error('Flutterwave verify connection error: '.$e->getMessage());

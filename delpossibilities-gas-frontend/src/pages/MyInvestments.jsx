@@ -61,7 +61,7 @@ function SignModal({ investment, token, onClose, onSigned }) {
       onSigned(data)
       onClose()
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setSaving(false)
     }

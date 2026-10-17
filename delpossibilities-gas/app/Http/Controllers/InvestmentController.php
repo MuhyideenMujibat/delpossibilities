@@ -153,8 +153,24 @@ class InvestmentController extends Controller
         ]);
 
         $path = 'contracts/investment-'.$investment->id.'.pdf';
-        Storage::disk('public')->put($path, $pdf->output());
+        // Private disk (storage/app/private, not web-servable) — see
+        // downloadContract() below and Investment::contractUrl() for how
+        // this is now actually reached.
+        Storage::disk('local')->put($path, $pdf->output());
 
         $investment->update(['contract_path' => $path]);
+    }
+
+    // Reached only via the signed URL Investment::contractUrl() mints —
+    // the 'signed' route middleware (see routes/api.php) already rejects a
+    // tampered or expired link before this runs, so there's nothing left to
+    // authorize here beyond the file existing.
+    public function downloadContract(Investment $investment)
+    {
+        if (! $investment->contract_path || ! Storage::disk('local')->exists($investment->contract_path)) {
+            abort(404, 'No contract is available for this investment.');
+        }
+
+        return Storage::disk('local')->download($investment->contract_path, 'investment-contract.pdf');
     }
 }

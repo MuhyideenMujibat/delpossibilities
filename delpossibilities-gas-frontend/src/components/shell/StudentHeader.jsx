@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { Link, NavLink } from 'react-router-dom'
 import { ShoppingCart, Truck } from 'lucide-react'
-import { apiFetch, formatNaira } from '../../api'
+import { formatNaira } from '../../api'
+import { publicFetch } from '../../publicData'
 import HeaderUserMenu from '../../HeaderUserMenu'
 import NotificationBell from '../../NotificationBell'
 import GuestUserMenu from './GuestUserMenu'
@@ -29,7 +30,7 @@ function StudentHeader({ token, role, onLogout }) {
   useEffect(() => {
     let cancelled = false
 
-    apiFetch('/price')
+    publicFetch('/price')
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (cancelled || !data) return
@@ -55,7 +56,7 @@ function StudentHeader({ token, role, onLogout }) {
       <div className="flex h-[52px] items-center justify-between px-4 sm:px-6 md:px-10">
         <div className="flex items-center gap-3">
           <Link to="/" className="flex items-center gap-2">
-            <img src={logo} alt="D'EL-Possibilities logo" className="h-7 w-7 rounded-full object-cover" />
+            <img src={logo} alt="D'EL-Possibilities logo" width={28} height={28} className="h-7 w-7 rounded-full object-cover" />
             <span className="hidden font-heading text-sm font-bold text-brand-navy lg:inline">D&apos;EL-POSSIBILITIES</span>
           </Link>
           <span className="eyebrow hidden sm:inline">{todayLabel()}</span>

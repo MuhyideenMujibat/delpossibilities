@@ -27,6 +27,7 @@ function AdminPermissions({ token }) {
 
       {error && <p className="alert-error mb-6">{error}</p>}
 
+
       {loading && <div className="skeleton h-64 w-full" />}
 
       {!loading && permissions.length === 0 && !error && (
