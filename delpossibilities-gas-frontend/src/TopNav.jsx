@@ -11,7 +11,7 @@ function TopNav({ token, isAdmin }) {
     <header className="sticky top-0 z-40 border-b border-slate-100 bg-white/90 backdrop-blur">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 sm:px-6">
         <Link to="/" className="flex items-center gap-3">
-          <img src={logo} alt="D'EL-Possibilities logo" className="h-9 w-9 rounded-full object-cover shadow-sm" />
+          <img src={logo} alt="D'EL-Possibilities logo" width={36} height={36} className="h-9 w-9 rounded-full object-cover shadow-sm" />
           <span className="text-sm font-semibold text-brand-navy sm:text-base">D&apos;EL-POSSIBILITIES</span>
         </Link>
 

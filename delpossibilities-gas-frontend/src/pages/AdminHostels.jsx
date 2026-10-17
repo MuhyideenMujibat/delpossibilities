@@ -27,7 +27,7 @@ function AdminHostels({ token }) {
       setHostels(await response.json())
       setError('')
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setLoading(false)
     }
@@ -62,7 +62,7 @@ function AdminHostels({ token }) {
       setName('')
       await fetchHostels()
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setSaving(false)
     }
@@ -87,7 +87,7 @@ function AdminHostels({ token }) {
       const updated = await response.json()
       setHostels((prev) => prev.map((h) => (h.id === updated.id ? updated : h)))
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setTogglingId(null)
     }
@@ -108,7 +108,7 @@ function AdminHostels({ token }) {
       setHostels((prev) => prev.filter((h) => h.id !== deleteTarget.id))
       setDeleteTarget(null)
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setDeleting(false)
     }
@@ -143,6 +143,7 @@ function AdminHostels({ token }) {
 
         {error && <p className="alert-error mt-4">{error}</p>}
       </div>
+
 
       {loading && <div className="skeleton h-40 w-full" />}
 

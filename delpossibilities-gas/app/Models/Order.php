@@ -6,13 +6,14 @@ use App\Mail\OrderReceiptMail;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 
 class Order extends Model
 {
-    use HasFactory;
+    use HasFactory, SoftDeletes;
 
     protected $fillable = [
         'user_id',
@@ -24,6 +25,9 @@ class Order extends Model
         'delivery_fee',
         'referral_credit_applied',
         'referral_discount_amount',
+        'referral_percent_used',
+        'referral_free_kg_applied',
+        'referral_free_kg_discount_amount',
         'vvip_discount_amount',
         'product_order_id',
         'attached_product_order_id',
@@ -47,6 +51,9 @@ class Order extends Model
             'loyalty_discount_amount' => 'decimal:2',
             'referral_credit_applied' => 'decimal:2',
             'referral_discount_amount' => 'decimal:2',
+            'referral_percent_used' => 'decimal:2',
+            'referral_free_kg_applied' => 'decimal:2',
+            'referral_free_kg_discount_amount' => 'decimal:2',
             'vvip_discount_amount' => 'decimal:2',
         ];
     }
@@ -119,9 +126,13 @@ class Order extends Model
         }
 
         try {
-            Mail::to($this->user->email)->send(new OrderReceiptMail($this));
+            // Queued, not sent inline — see OrderReceiptMail. This only
+            // guards against queueing itself failing (e.g. the jobs table
+            // being unreachable); an actual delivery failure becomes a
+            // failed queue job instead of blocking the request.
+            Mail::to($this->user->email)->queue(new OrderReceiptMail($this));
         } catch (\Throwable $e) {
-            Log::error('Failed to send order receipt email', [
+            Log::error('Failed to queue order receipt email', [
                 'order_id' => $this->id,
                 'error' => $e->getMessage(),
             ]);
@@ -168,5 +179,39 @@ class Order extends Model
             : round((float) $user->loyalty_progress_kg + (float) $this->kg, 2);
 
         $user->save();
+    }
+
+    // Called once this order is confirmed paid — same reasoning as
+    // applyLoyaltyProgress above: a pending, unpaid order must never
+    // actually spend the balance, only preview what it WOULD spend (see
+    // OrderController::referralFreeKgDiscount, computed at store()/update()
+    // time purely for pricing — this is the one place the balance and the
+    // monthly spending cap actually move). If the order is abandoned
+    // (edited away from, or deleted) before payment, nothing here ever ran,
+    // so there's nothing to refund — unlike the legacy referral-percent
+    // balance, which IS spent at creation time and so DOES need refunding
+    // on edit (see OrderController::update).
+    public function applyReferralFreeKg(): void
+    {
+        $used = (float) $this->referral_free_kg_applied;
+
+        if ($used <= 0) {
+            return;
+        }
+
+        $user = $this->user;
+
+        if (! $user) {
+            return;
+        }
+
+        $currentMonth = now()->format('Y-m');
+        $monthUsed = $user->referral_free_kg_month === $currentMonth ? (float) $user->referral_free_kg_month_used : 0.0;
+
+        $user->decrement('referral_free_kg_balance', $used);
+        $user->update([
+            'referral_free_kg_month' => $currentMonth,
+            'referral_free_kg_month_used' => round($monthUsed + $used, 2),
+        ]);
     }
 }

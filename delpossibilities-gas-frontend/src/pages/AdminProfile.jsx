@@ -25,7 +25,7 @@ function AdminProfile({ token }) {
         setEmail(data.email || '')
         setName(data.name || '')
       } catch {
-        setError('Could not reach the server.')
+        setError('Check your internet connection.')
       } finally {
         setLoading(false)
       }
@@ -56,7 +56,7 @@ function AdminProfile({ token }) {
       setName(data.name ?? name)
       setMessage('Profile updated successfully!')
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setSaving(false)
     }

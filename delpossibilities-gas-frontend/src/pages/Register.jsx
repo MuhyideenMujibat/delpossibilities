@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useNavigate, useLocation, Link } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { useNavigate, useLocation, Link, useSearchParams } from 'react-router-dom'
 import { User, Mail, Home, MapPin, Phone, ShieldCheck, ArrowLeft, Gift } from 'lucide-react'
 import { apiFetch, resolveRole, resolvePermissions } from '../api'
 import { takePostAuthRedirect } from '../authRedirect'
@@ -19,6 +19,10 @@ function Register({ setToken, setRole, setPermissions }) {
   const [address, setAddress] = useState('')
   const [phone, setPhone] = useState('')
   const [referredByCustomerId, setReferredByCustomerId] = useState('')
+  // The referral field is optional, so it stays tucked away behind a link
+  // for people registering directly. Someone arriving through a referral
+  // link (?ref=...) sees it open and pre-filled instead.
+  const [showReferral, setShowReferral] = useState(() => Boolean(new URLSearchParams(window.location.search).get('ref')))
   const [otp, setOtp] = useState('')
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
@@ -27,11 +31,29 @@ function Register({ setToken, setRole, setPermissions }) {
   const navigate = useNavigate()
   const location = useLocation()
   const from = location.state?.from
+  const [searchParams] = useSearchParams()
+
+  // Lets a shared referral link (see ReferralShareModal.jsx) land here with
+  // the code already filled in — e.g. /register?ref=DEL-2026-0001. Stays
+  // editable, just pre-filled.
+  useEffect(() => {
+    const ref = searchParams.get('ref')
+    if (ref) {
+      setReferredByCustomerId(ref.trim())
+      setShowReferral(true)
+    }
+  }, [searchParams])
 
   const handleRegister = async (e) => {
     e.preventDefault()
     setError('')
     setMessage('')
+
+    if (password !== passwordConfirmation) {
+      setError('Password and confirm password do not match.')
+      return
+    }
+
     setSubmitting(true)
 
     try {
@@ -59,7 +81,7 @@ function Register({ setToken, setRole, setPermissions }) {
       setOtp('')
       setStep('otp')
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setSubmitting(false)
     }
@@ -95,7 +117,7 @@ function Register({ setToken, setRole, setPermissions }) {
       const stored = takePostAuthRedirect()
       navigate(role === 'admin' || role === 'super_admin' ? '/admin' : from || stored || '/home', { replace: true })
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setSubmitting(false)
     }
@@ -121,7 +143,7 @@ function Register({ setToken, setRole, setPermissions }) {
 
       setMessage(data?.message || 'A new code has been sent to your email.')
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setResending(false)
     }
@@ -283,14 +305,25 @@ function Register({ setToken, setRole, setPermissions }) {
         required
       />
 
-      <AuthField
-        id="referred-by"
-        label="Referred by (Customer ID) — optional"
-        icon={Gift}
-        placeholder="DEL-2026-0001"
-        value={referredByCustomerId}
-        onChange={(e) => setReferredByCustomerId(e.target.value.trim())}
-      />
+      {showReferral ? (
+        <AuthField
+          id="referred-by"
+          label="Referred by (Customer ID) — optional"
+          icon={Gift}
+          placeholder="DEL-2026-0001"
+          value={referredByCustomerId}
+          onChange={(e) => setReferredByCustomerId(e.target.value.trim())}
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => setShowReferral(true)}
+          className="flex items-center gap-1.5 self-start text-sm font-medium text-brand-teal hover:underline"
+        >
+          <Gift className="h-4 w-4" strokeWidth={1.8} />
+          Do you want to add a referral code?
+        </button>
+      )}
 
       <button type="submit" disabled={submitting} className="btn-primary mt-2">
         {submitting ? 'Sending code…' : 'Register'}

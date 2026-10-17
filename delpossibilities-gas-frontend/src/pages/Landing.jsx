@@ -157,7 +157,7 @@ function Landing({ token, isAdmin }) {
         <div className="mx-auto grid max-w-6xl grid-cols-1 gap-8 px-4 py-10 sm:px-6 md:grid-cols-4">
           <div className="md:col-span-2">
             <div className="flex items-center gap-3">
-              <img src={logo} alt="D'EL-Possibilities logo" className="h-10 w-10 rounded-full object-cover" />
+              <img src={logo} alt="D'EL-Possibilities logo" width={40} height={40} className="h-10 w-10 rounded-full object-cover" />
               <span className="font-semibold text-brand-navy">D&apos;EL-POSSIBILITIES</span>
             </div>
             <p className="mt-4 max-w-md text-sm leading-relaxed text-slate-500">

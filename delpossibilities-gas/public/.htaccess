@@ -5,6 +5,16 @@
 
     RewriteEngine On
 
+    # Long browser cache for images only (cylinder/product photos in
+    # /storage and static files in /images). Uploads get a new random file
+    # name on every change, so a cached copy can never go stale. PDFs
+    # (signed contracts) and everything else are deliberately left out.
+    <IfModule mod_headers.c>
+        <FilesMatch "\.(jpe?g|png|webp|gif|avif|svg|ico)$">
+            Header set Cache-Control "public, max-age=2592000, immutable"
+        </FilesMatch>
+    </IfModule>
+
     # Handle Authorization Header
     RewriteCond %{HTTP:Authorization} .
     RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]

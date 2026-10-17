@@ -4,7 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\URL;
 
 class Investment extends Model
 {
@@ -58,10 +58,21 @@ class Investment extends Model
         ];
     }
 
+    // The contract PDF lives on the private disk now (see
+    // InvestmentController::generateContractPdf) — it used to be a plain
+    // public-storage URL with the contract's id as its only "protection",
+    // which meant anyone who guessed contracts/investment-{id}.pdf could
+    // read another investor's name, phone, capital amount and signature.
+    // A signed URL, minted fresh every time this attribute is serialized
+    // (i.e. only inside a response already scoped to the right viewer — see
+    // InvestmentController::mine/index), stands in for auth on what's
+    // otherwise a plain <a href> download link.
     protected function contractUrl(): Attribute
     {
         return Attribute::make(
-            get: fn () => $this->contract_path ? Storage::disk('public')->url($this->contract_path) : null,
+            get: fn () => $this->contract_path
+                ? URL::temporarySignedRoute('investments.contract.download', now()->addMinutes(30), ['investment' => $this->id])
+                : null,
         );
     }
 }

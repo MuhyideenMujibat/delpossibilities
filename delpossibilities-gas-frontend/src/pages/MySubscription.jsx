@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { CalendarCheck, Flame, Copy, ArrowRightLeft, Droplets, Clock, ShoppingCart, Info, Image as ImageIcon, X } from 'lucide-react'
 import { apiFetch, formatNaira, formatDate, resolveImageUrl } from '../api'
+import { publicFetch } from '../publicData'
 import PageHeader from '../components/PageHeader'
 import EmptyState from '../components/EmptyState'
 import ConfirmDialog from '../components/ConfirmDialog'
@@ -63,7 +64,7 @@ function TransferForm({ subscriber, token, onDone }) {
       show('Subscription transferred.', { type: 'success' })
       onDone(true)
     } catch {
-      show('Could not reach the server.', { type: 'error' })
+      show('Check your internet connection.', { type: 'error' })
     } finally {
       setSubmitting(false)
     }
@@ -142,6 +143,16 @@ function MySubscription({ token }) {
   const [paying, setPaying] = useState(false)
   const { startPayment: startGatewayPayment, pickerOpen, pickerBusy, chooseGateway, cancelPicker } = usePaymentCheckout(token)
   const [requestingRefill, setRequestingRefill] = useState(false)
+
+  // Same reasoning as CreateOrder.jsx — the shared /user context is only
+  // refetched when something explicitly asks it to, but referral standing
+  // can change from someone else's action (a referred student's qualifying
+  // purchase) that this browser has no way to know about. Force a fresh
+  // copy whenever this page opens, since it's spent here too.
+  useEffect(() => {
+    refreshUser?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const [transferring, setTransferring] = useState(false)
   const [refillKg, setRefillKg] = useState('')
   const [attachableOrders, setAttachableOrders] = useState([])
@@ -152,6 +163,7 @@ function MySubscription({ token }) {
   const [bundleCart, setBundleCart] = useState(true)
   const [addToDeliveryOpen, setAddToDeliveryOpen] = useState(false)
   const [cylinderModalOpen, setCylinderModalOpen] = useState(false)
+  const [refillConfirmOpen, setRefillConfirmOpen] = useState(false)
 
   const [selectedPlan, setSelectedPlan] = useState(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -192,7 +204,8 @@ function MySubscription({ token }) {
   }, [token])
 
   const daysLeft = useMemo(() => daysRemaining(subscriber?.ends_at), [subscriber])
-  const hasPendingRefill = subscriber?.refills?.some((r) => r.status === 'pending')
+  const pendingRefill = subscriber?.refills?.find((r) => r.status === 'pending')
+  const hasPendingRefill = Boolean(pendingRefill)
   const hasCylinderImage = Boolean(user?.cylinder_image_url)
   const remainingKg = subscriber ? Number(subscriber.remaining_kg ?? 0) : 0
   const isExpired = subscriber?.ends_at ? new Date(subscriber.ends_at).getTime() < Date.now() : false
@@ -223,7 +236,7 @@ function MySubscription({ token }) {
 
       window.location.href = data.authorization_url
     } catch {
-      show('Could not reach the server.', { type: 'error' })
+      show('Check your internet connection.', { type: 'error' })
       setPaying(false)
     }
   }
@@ -285,10 +298,9 @@ function MySubscription({ token }) {
 
       if (bundlingCart && bundledProductOrderId) {
         cart.clear()
-        const payRes = await apiFetch(`/product-orders/${bundledProductOrderId}/pay`, { method: 'POST', token })
-        const payData = await payRes.json().catch(() => null)
-        if (!payRes.ok || !payData?.authorization_url) {
-          show('Refill requested — but your cart payment could not start. Pay for it from My Shop Orders.', { type: 'error' })
+        const { ok: payOk, data: payData, cancelled: payCancelled } = await startGatewayPayment('productOrder', bundledProductOrderId)
+        if (payCancelled || !payOk || !payData?.authorization_url) {
+          show(payData?.message || 'Refill requested — but your cart payment could not start. Pay for it from My Shop Orders.', { type: 'error' })
           setRefillKg('')
           setAttachOrderId('')
           await load()
@@ -311,22 +323,38 @@ function MySubscription({ token }) {
       await load()
       loadAttachableOrders()
     } catch {
-      show('Could not reach the server.', { type: 'error' })
+      show('Check your internet connection.', { type: 'error' })
     } finally {
       setRequestingRefill(false)
     }
   }
 
-  const handleRequestRefill = (e) => {
-    e.preventDefault()
-    if (requestingRefill) return
-
+  // Split out from handleRequestRefill so the "already have one pending"
+  // confirm step (below) can gate it, while the normal no-pending case
+  // skips straight to it exactly as before.
+  const proceedWithRefillRequest = () => {
     if (cart.itemCount === 0 && attachableOrders.length === 0) {
       setAddToDeliveryOpen(true)
       return
     }
 
     submitRefillRequest()
+  }
+
+  const handleRequestRefill = (e) => {
+    e.preventDefault()
+    if (requestingRefill) return
+
+    // The backend (RefillController::store) already safely hands back the
+    // SAME existing pending refill instead of creating a duplicate — this
+    // is purely about warning the student up front instead of silently
+    // doing that behind what used to be a disabled button.
+    if (hasPendingRefill) {
+      setRefillConfirmOpen(true)
+      return
+    }
+
+    proceedWithRefillRequest()
   }
 
   const copyCustomerId = () => {
@@ -359,7 +387,7 @@ function MySubscription({ token }) {
     if (!pendingPlanId) return
     sessionStorage.removeItem('pendingSubscribePlanId')
 
-    apiFetch('/subscription-plans')
+    publicFetch('/subscription-plans')
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => {
         const found = (Array.isArray(data) ? data : []).find((p) => String(p.id) === pendingPlanId)
@@ -410,7 +438,7 @@ function MySubscription({ token }) {
       show(`Redirecting you to ${gateway === 'flutterwave' ? 'Flutterwave' : 'Paystack'}…`, { type: 'success', duration: 2500 })
       window.location.href = payData.authorization_url
     } catch {
-      setSubscribeError('Could not reach the server.')
+      setSubscribeError('Check your internet connection.')
       setConfirmOpen(false)
       setSubmitting(false)
     }
@@ -450,7 +478,11 @@ function MySubscription({ token }) {
               <h3 className="mt-1 font-heading text-xl font-bold text-brand-navy">{TIER_LABELS[plan.tier] || plan.tier}</h3>
               <div className="mt-1 flex items-center gap-1.5 text-sm text-slate-500">
                 <Flame className="h-4 w-4 text-brand-ember" strokeWidth={2} />
-                {Number(plan.cylinder_kg)} kg total allowance — locked at {formatNaira(subscriber.locked_price)}
+                {Number(plan.cylinder_kg)} kg total allowance — locked at{' '}
+                {formatNaira(subscriber.total_amount ?? subscriber.locked_price)}
+                {Number(subscriber.referral_discount_amount) > 0 && (
+                  <span className="text-brand-teal"> (referral discount applied)</span>
+                )}
               </div>
             </div>
 
@@ -508,6 +540,13 @@ function MySubscription({ token }) {
             Free — just tell us how many kg you need. It's deducted from your {remainingKg} kg remaining.
           </p>
 
+          {hasPendingRefill && (
+            <p className="mt-3 flex items-center gap-2 rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              <Clock className="h-4 w-4 flex-shrink-0" strokeWidth={1.8} />
+              You already have a pending refill request ({pendingRefill.kg_requested} kg) awaiting approval.
+            </p>
+          )}
+
           <form onSubmit={handleRequestRefill} className="mt-4 flex flex-col gap-3">
             {/* Same cylinder-photo requirement as a normal gas order — the
                 rider needs it to identify the cylinder at pickup. The upload
@@ -518,6 +557,10 @@ function MySubscription({ token }) {
                 <img
                   src={resolveImageUrl(user.cylinder_image_url)}
                   alt="Cylinder"
+                  width={48}
+                  height={48}
+                  loading="lazy"
+                  decoding="async"
                   className="h-12 w-12 flex-shrink-0 rounded-lg object-cover ring-1 ring-slate-200"
                 />
               ) : (
@@ -556,30 +599,27 @@ function MySubscription({ token }) {
                   placeholder={`up to ${remainingKg}`}
                   value={refillKg}
                   onChange={(e) => setRefillKg(e.target.value)}
-                  disabled={hasPendingRefill}
                   required
                   className="input-field"
                 />
               </div>
               <button
                 type="submit"
-                disabled={requestingRefill || hasPendingRefill || !hasCylinderImage}
+                disabled={requestingRefill || !hasCylinderImage}
                 className="btn-primary flex-shrink-0 whitespace-nowrap"
               >
                 <Droplets className="h-4 w-4" strokeWidth={2} />
-                {hasPendingRefill
-                  ? 'Refill Already Requested'
-                  : !hasCylinderImage
-                    ? 'Add a cylinder photo first'
-                    : requestingRefill
-                      ? 'Requesting…'
-                      : bundleCart && cart.itemCount > 0
-                        ? 'Request Refill & Pay Cart'
-                        : 'Request a Refill'}
+                {!hasCylinderImage
+                  ? 'Add a cylinder photo first'
+                  : requestingRefill
+                    ? 'Requesting…'
+                    : bundleCart && cart.itemCount > 0
+                      ? 'Request Refill & Pay Cart'
+                      : 'Request a Refill'}
               </button>
             </div>
 
-            {cart.itemCount > 0 && !hasPendingRefill && (
+            {cart.itemCount > 0 && (
               <label className="flex items-start gap-2.5 rounded-xl border border-brand-teal/20 bg-brand-teal/5 px-4 py-3 text-sm">
                 <input
                   type="checkbox"
@@ -600,7 +640,7 @@ function MySubscription({ token }) {
               </label>
             )}
 
-            {attachableOrders.length > 0 && !hasPendingRefill && (
+            {attachableOrders.length > 0 && (
               <label className="flex items-start gap-2.5 rounded-xl border border-brand-teal/20 bg-brand-teal/5 px-4 py-3 text-sm">
                 <input
                   type="checkbox"
@@ -641,7 +681,11 @@ function MySubscription({ token }) {
       {token && subscriber && !isUsableSubscription && subscriber.status !== 'pending' && (
         <p className="mb-6 flex items-center gap-2 text-sm text-slate-500">
           <Info className="h-4 w-4 flex-shrink-0 text-slate-400" strokeWidth={2} />
-          {kgExhausted ? "Your subscription's kg allowance is used up." : 'Your subscription has expired.'}
+          {subscriber.status === 'cancelled'
+            ? 'Your subscription was cancelled. You can pick a new plan below.'
+            : kgExhausted
+              ? "Your subscription's kg allowance is used up."
+              : 'Your subscription has expired.'}
         </p>
       )}
 
@@ -720,11 +764,50 @@ function MySubscription({ token }) {
       <ConfirmDialog
         open={confirmOpen}
         title={selectedPlan ? `Subscribe to ${TIER_LABELS[selectedPlan.tier]} ${selectedPlan.package_type === 'session' ? 'Session' : 'Semester'}?` : ''}
-        message={selectedPlan ? `${formatNaira(selectedPlan.price)} — you'll be sent to pay next, then this price is locked in for the duration.` : ''}
+        message={
+          selectedPlan
+            ? (() => {
+                // Preview only — the real discount is computed and locked in
+                // server-side once the subscriber row exists (see
+                // SubscriberController::store), which also enforces the
+                // same two conditions this preview approximates: only a
+                // referrer's first-ever subscription, and only a plan at
+                // ₦15,000 or under. `!subscriber` is a good enough proxy for
+                // "first ever" here — any existing row (even one being
+                // repointed to this same plan) means it isn't.
+                const isFirstSubscription = !subscriber
+                const referralPercent = isFirstSubscription && selectedPlan.price <= 15000
+                  ? Math.min(Number(user?.referral_discount_percent_available || 0), 100)
+                  : 0
+                const previewTotal = Math.max(selectedPlan.price - (selectedPlan.price * referralPercent) / 100, 0)
+
+                return referralPercent > 0
+                  ? `${formatNaira(previewTotal)} after your ${referralPercent}% referral discount (plan price ${formatNaira(selectedPlan.price)}) — you'll be sent to pay next, then this price is locked in for the duration.`
+                  : `${formatNaira(selectedPlan.price)} — you'll be sent to pay next, then this price is locked in for the duration.`
+              })()
+            : ''
+        }
         confirmLabel="Confirm & Pay"
         busy={submitting}
         onConfirm={handleConfirmSubscribe}
         onCancel={() => setConfirmOpen(false)}
+      />
+
+      <ConfirmDialog
+        open={refillConfirmOpen}
+        title="Request another refill?"
+        message={
+          pendingRefill
+            ? `You already have a pending refill request for ${pendingRefill.kg_requested} kg awaiting approval. Are you sure you want to request another one?`
+            : ''
+        }
+        confirmLabel="Yes, Request Another"
+        busy={requestingRefill}
+        onConfirm={() => {
+          setRefillConfirmOpen(false)
+          proceedWithRefillRequest()
+        }}
+        onCancel={() => setRefillConfirmOpen(false)}
       />
 
       <PaymentGatewayModal open={pickerOpen} busy={pickerBusy} onChoose={chooseGateway} onCancel={cancelPicker} />

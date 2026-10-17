@@ -9,6 +9,12 @@ const PAY_PATH = {
     paystack: (id) => `/orders/${id}/pay`,
     flutterwave: (id) => `/orders/${id}/pay-flutterwave`,
   },
+  // A standalone shop (cart) checkout — ProductOrderController::pay /
+  // FlutterwaveController::payProductOrder.
+  productOrder: {
+    paystack: (id) => `/product-orders/${id}/pay`,
+    flutterwave: (id) => `/product-orders/${id}/pay-flutterwave`,
+  },
   subscriber: {
     paystack: (id) => `/subscribers/${id}/pay`,
     flutterwave: (id) => `/subscribers/${id}/pay-flutterwave`,

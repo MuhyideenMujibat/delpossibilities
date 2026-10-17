@@ -6,6 +6,14 @@ use Illuminate\Database\Eloquent\Model;
 
 class ProductVariant extends Model
 {
+    protected static function booted(): void
+    {
+        $bump = fn () => \App\Support\CatalogCache::bump();
+
+        static::saved($bump);
+        static::deleted($bump);
+    }
+
     protected $fillable = [
         'product_id',
         'label',

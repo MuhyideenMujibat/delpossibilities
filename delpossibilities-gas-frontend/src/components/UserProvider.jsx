@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { UserContext } from '../userContext'
 import { apiFetch } from '../api'
+import { readCachedData, writeCachedData } from '../offlineCache'
 
 // Fetches GET /user once per token (login/logout) and shares it — before
 // this, StudentHeader, HeaderUserMenu, Home's greeting strip, CreateOrder,
@@ -11,8 +12,10 @@ import { apiFetch } from '../api'
 // spends referral credit) to pull a fresh copy instead of waiting on the
 // next token change.
 export function UserProvider({ token, children }) {
-  const [user, setUser] = useState(null)
-  const [loading, setLoading] = useState(Boolean(token))
+  // Seeded from the last successful /user so the header and greeting render
+  // instantly on a slow connection; the fetch below replaces it.
+  const [user, setUser] = useState(() => (token ? readCachedData('user', token) : null))
+  const [loading, setLoading] = useState(() => Boolean(token) && !readCachedData('user', token))
   const requestId = useRef(0)
 
   const refresh = () => {
@@ -28,7 +31,9 @@ export function UserProvider({ token, children }) {
     return apiFetch('/user', { token })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
-        if (id === requestId.current) setUser(data)
+        if (id !== requestId.current) return
+        if (data) writeCachedData('user', token, data)
+        setUser(data)
       })
       .catch(() => {})
       .finally(() => {

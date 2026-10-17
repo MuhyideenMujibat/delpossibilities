@@ -6,7 +6,7 @@ const MAX_WIDTH = { sm: 'max-w-sm', md: 'max-w-lg' }
 
 const FEATURES = [
   'Order a refill in under a minute',
-  'Pay securely online with Paystack',
+  'Pay securely online',
   'Track pickup, refill, and delivery live',
 ]
 
@@ -16,7 +16,7 @@ function AuthLayout({ title, description, maxWidth = 'sm', onSubmit, success, er
       <div className="relative hidden overflow-hidden bg-brand-navy px-10 py-12 md:flex md:w-[44%] md:flex-col md:justify-between lg:w-2/5 lg:px-14">
         <div>
           <div className="flex items-center gap-3">
-            <img src={logo} alt="D'EL-Possibilities logo" className="h-10 w-10 rounded-full object-cover ring-2 ring-white/20" />
+            <img src={logo} alt="D'EL-Possibilities logo" width={40} height={40} className="h-10 w-10 rounded-full object-cover ring-2 ring-white/20" />
             <span className="font-heading text-sm font-semibold tracking-wide text-white">D&apos;EL-POSSIBILITIES</span>
           </div>
 
@@ -45,7 +45,7 @@ function AuthLayout({ title, description, maxWidth = 'sm', onSubmit, success, er
       <div className="flex flex-1 items-center justify-center px-4 py-10 sm:px-6">
         <div className={`w-full ${MAX_WIDTH[maxWidth]}`}>
           <Reveal className="mb-6 flex items-center justify-center gap-3 md:hidden" y={12}>
-            <img src={logo} alt="D'EL-Possibilities logo" className="h-11 w-11 rounded-full object-cover shadow-sm" />
+            <img src={logo} alt="D'EL-Possibilities logo" width={44} height={44} className="h-11 w-11 rounded-full object-cover shadow-sm" />
             <span className="font-heading text-base font-semibold text-brand-navy">D&apos;EL-POSSIBILITIES</span>
           </Reveal>
 

@@ -17,10 +17,14 @@ class PasswordResetController extends Controller
 
     public function forgotPassword(Request $request)
     {
+        // Deliberately confirms whether the email is registered (product
+        // decision — clearer UX over hiding account existence). This is a
+        // user-enumeration trade-off: an attacker can use this endpoint to
+        // check which emails have accounts here.
         $request->validate([
             'email' => ['required', 'string', 'email', Rule::exists('users', 'email')],
         ], [
-            'email.exists' => 'We could not find an account with that email.',
+            'email.exists' => 'That email is not registered with us.',
         ]);
 
         $user = User::where('email', $request->email)->first();
@@ -29,7 +33,7 @@ class PasswordResetController extends Controller
 
         DB::table('password_reset_tokens')->updateOrInsert(
             ['email' => $user->email],
-            ['token' => Hash::make($otp), 'created_at' => now()]
+            ['token' => Hash::make($otp), 'created_at' => now(), 'attempts' => 0]
         );
 
         $user->notify(new PasswordResetOtpNotification($otp));
@@ -49,9 +53,21 @@ class PasswordResetController extends Controller
 
         $record = DB::table('password_reset_tokens')->where('email', $validated['email'])->first();
 
+        // Same reasoning as AuthController::verifyRegistration — bounds the
+        // number of guesses against this code, not just its time window.
+        if ($record && $record->attempts >= 5) {
+            throw ValidationException::withMessages([
+                'otp' => ['Too many incorrect attempts. Please request a new code.'],
+            ]);
+        }
+
         $expired = ! $record || Carbon::parse($record->created_at)->addMinutes(self::OTP_TTL_MINUTES)->isPast();
 
         if ($expired || ! Hash::check($validated['otp'], $record->token)) {
+            if ($record) {
+                DB::table('password_reset_tokens')->where('email', $validated['email'])->increment('attempts');
+            }
+
             throw ValidationException::withMessages([
                 'otp' => ['That code is invalid or has expired. Please request a new one.'],
             ]);

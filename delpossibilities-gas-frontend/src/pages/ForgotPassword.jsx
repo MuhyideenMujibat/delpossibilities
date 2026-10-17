@@ -40,7 +40,7 @@ function ForgotPassword() {
       setOtp('')
       setStep('otp')
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setSubmitting(false)
     }
@@ -67,7 +67,7 @@ function ForgotPassword() {
 
       setMessage('A new code has been sent to your email.')
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setResending(false)
     }
@@ -76,6 +76,12 @@ function ForgotPassword() {
   const handleReset = async (e) => {
     e.preventDefault()
     setError('')
+
+    if (password !== passwordConfirmation) {
+      setError('Password and confirm password do not match.')
+      return
+    }
+
     setSubmitting(true)
 
     try {
@@ -99,7 +105,7 @@ function ForgotPassword() {
 
       navigate('/login', { state: { message: data?.message || 'Your password has been reset. Please log in.' } })
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setSubmitting(false)
     }

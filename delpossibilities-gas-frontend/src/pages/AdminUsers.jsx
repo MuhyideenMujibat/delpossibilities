@@ -4,8 +4,6 @@ import { apiFetch } from '../api'
 import PageHeader from '../components/PageHeader'
 import PasswordInput from '../components/PasswordInput'
 
-const DEFAULT_PASSWORD = '123456789'
-
 const EMPTY_FORM = { name: '', email: '', phone: '', hostel: '', password: '' }
 
 // Mirrors User::TIER_NONE / TIER_VIP / TIER_VVIP. VIP: free delivery only.
@@ -70,7 +68,6 @@ function AdminUsers({ token, isSuperAdmin }) {
     setCreated(null)
     setSaving(true)
 
-    const passwordUsed = useDefaultPassword ? DEFAULT_PASSWORD : form.password
     const isEmployee = isSuperAdmin && accountType === 'admin'
 
     try {
@@ -102,7 +99,10 @@ function AdminUsers({ token, isSuperAdmin }) {
       setCreated({
         name: data.name,
         email: data.email,
-        password: passwordUsed,
+        // The server generates and returns the real password only when it
+        // picked one (use_default_password) — it can't be recovered after
+        // this response, since the account stores only its hash.
+        password: useDefaultPassword ? data.generated_password : form.password,
         permissions: data.permissions?.map((p) => p.label) || [],
       })
       setForm(EMPTY_FORM)
@@ -111,7 +111,7 @@ function AdminUsers({ token, isSuperAdmin }) {
       setUserTypeId('')
       setSelectedPermissionIds([])
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setSaving(false)
     }
@@ -295,8 +295,8 @@ function AdminUsers({ token, isSuperAdmin }) {
               className="mt-0.5 h-4 w-4 flex-shrink-0 accent-brand-teal"
             />
             <span className="text-slate-600">
-              <span className="font-medium text-brand-navy">Use default password ({DEFAULT_PASSWORD})</span> — skip
-              typing one; the account is verified either way.
+              <span className="font-medium text-brand-navy">Use a generated password</span> — skip typing one;
+              the account is verified either way, and the generated password is shown once it's created.
             </span>
           </label>
 

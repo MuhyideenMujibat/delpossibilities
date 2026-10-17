@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
 class AdminUserController extends Controller
@@ -40,7 +41,14 @@ class AdminUserController extends Controller
             'permission_ids.*' => ['integer', 'exists:permissions,id'],
         ]);
 
-        $password = $request->boolean('use_default_password') ? '123456789' : $validated['password'];
+        // A fixed literal here ('123456789') meant every admin-created
+        // account started on the exact same publicly-guessable password —
+        // now doubly bad with the source itself on a public repo. Generate
+        // a random one instead and hand it back once in the response (it
+        // can't be recovered later — the User model hashes it on save)
+        // so the admin can share it with the new user.
+        $generatedPassword = $request->boolean('use_default_password') ? Str::password(12) : null;
+        $password = $generatedPassword ?? $validated['password'];
 
         $user = User::create([
             'name' => $validated['name'],
@@ -61,6 +69,9 @@ class AdminUserController extends Controller
             $user->permissions()->sync($validated['permission_ids'] ?? []);
         }
 
-        return response()->json($user->load('permissions'), 201);
+        return response()->json(
+            $user->load('permissions')->setAttribute('generated_password', $generatedPassword),
+            201
+        );
     }
 }
