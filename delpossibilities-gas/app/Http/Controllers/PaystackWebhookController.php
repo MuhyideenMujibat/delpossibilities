@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class PaystackWebhookController extends Controller
@@ -18,8 +19,9 @@ class PaystackWebhookController extends Controller
     // Step 3: Recalculate what the signature SHOULD be, using our secret key
     $expectedSignature = hash_hmac('sha512', $payload, config('services.paystack.secret_key'));
 
-    // Step 4: Compare them. If they don't match, reject immediately.
-    if ($paystackSignature !== $expectedSignature) {
+    // Step 4: Compare them. hash_equals(), not !==, so this doesn't leak
+    // timing information about how many leading bytes matched.
+    if (! $paystackSignature || ! hash_equals($expectedSignature, $paystackSignature)) {
         return response()->json(['message' => 'Invalid signature'], 401);
     }
 
@@ -58,7 +60,7 @@ class PaystackWebhookController extends Controller
 private function handleOrderPayment(string $reference, int $amountPaidInKobo)
 {
     // Step 8: Find the order using that reference
-    $order = \App\Models\Order::where('paystack_reference', $reference)->first();
+    $order = \App\Models\Order::withTrashed()->where('paystack_reference', $reference)->first();
 
     if (!$order) {
         // No matching order found — log it, but still respond 200 so Paystack doesn't keep retrying
@@ -81,31 +83,52 @@ private function handleOrderPayment(string $reference, int $amountPaidInKobo)
         return response()->json(['status' => 'amount mismatch']);
     }
 
-    // Step 10: Everything checks out — approve the order
-    if ($order->status === 'pending') {
-        $order->update([
+    // Step 10: Everything checks out — approve the order. Locked and
+    // re-checked inside a transaction because Paystack retries undelivered
+    // webhooks, and the frontend's own verify-payment call (see
+    // OrderController::verifyPayment) can land in the same window — without
+    // the lock, both could read status='pending' before either commits,
+    // double-crediting loyalty progress and sending two receipt emails.
+    $approved = DB::transaction(function () use ($order) {
+        $locked = \App\Models\Order::withTrashed()->whereKey($order->id)->lockForUpdate()->first();
+
+        if ($locked->status !== 'pending') {
+            return null;
+        }
+
+        $locked->update([
             'status' => 'approved',
             'paid_at' => now(),
         ]);
-        $order->notifyStatusChange();
-        $order->applyLoyaltyProgress();
+        // Undoes an admin's soft delete the moment this order is actually
+        // paid for — safe to call even if it was never trashed (see
+        // OrderController::destroy).
+        $locked->restore();
 
         // A bundled cart that was still pending rides on this same charge —
         // mark it paid too, since it never gets its own reference/webhook
         // event. An already-approved cart (attached after being paid for
         // standalone) is left untouched — it kept its own real paid_at.
-        if ($order->productOrder?->status === 'pending') {
-            $order->productOrder->update(['status' => 'approved', 'paid_at' => $order->paid_at]);
+        if ($locked->productOrder?->status === 'pending') {
+            $locked->productOrder->update(['status' => 'approved', 'paid_at' => $locked->paid_at]);
         }
 
-        $order->user->grantReferralRewardForGasOrder((float) $order->kg);
+        return $locked;
+    });
 
-        // Last, deliberately: this talks to an external SMTP server and can
-        // hang or time out (seen in production — a stuck send here once
-        // fatal-errored the whole request past PHP's execution-time limit),
-        // which would silently skip every side effect above it. Nothing
-        // above may depend on the email having sent.
-        $order->sendReceiptEmail();
+    if ($approved) {
+        $approved->notifyStatusChange();
+        $approved->applyLoyaltyProgress();
+        $approved->applyReferralFreeKg();
+        $approved->user->grantReferralRewardForGasOrder($approved);
+
+        // Last, deliberately, and outside the transaction: this talks to an
+        // external SMTP server and can hang or time out (seen in production
+        // — a stuck send here once fatal-errored the whole request past
+        // PHP's execution-time limit). Nothing above may depend on the
+        // email having sent, and holding the DB transaction open across a
+        // slow SMTP call would only make things worse.
+        $approved->sendReceiptEmail();
     }
 
     return response()->json(['status' => 'success']);
@@ -131,9 +154,13 @@ private function handleProductOrderPayment(string $reference, int $amountPaidInK
         return response()->json(['status' => 'amount mismatch']);
     }
 
-    if ($productOrder->status === 'pending') {
-        $productOrder->update(['status' => 'approved', 'paid_at' => now()]);
-    }
+    DB::transaction(function () use ($productOrder) {
+        $locked = \App\Models\ProductOrder::whereKey($productOrder->id)->lockForUpdate()->first();
+
+        if ($locked->status === 'pending') {
+            $locked->update(['status' => 'approved', 'paid_at' => now()]);
+        }
+    });
 
     return response()->json(['status' => 'success']);
 }
@@ -159,18 +186,30 @@ private function handleSubscriptionPayment(string $reference, int $amountPaidInK
     }
 
     $subscriber = $payment->subscriber;
-    $subscriber?->load('plan');
 
-    if ($subscriber && $subscriber->status === 'pending') {
-        try {
-            $subscriber->activate($payment);
-        } catch (\RuntimeException $e) {
-            Log::warning('Subscription payment received but calendar not set', [
-                'subscriber_id' => $subscriber->id,
-            ]);
+    if (! $subscriber) {
+        return response()->json(['status' => 'success']);
+    }
 
-            return response()->json(['status' => 'calendar not set']);
-        }
+    try {
+        $activated = DB::transaction(function () use ($subscriber, $payment) {
+            $locked = \App\Models\Subscriber::whereKey($subscriber->id)->lockForUpdate()->first();
+            $locked->load('plan');
+
+            if ($locked->status !== 'pending') {
+                return false;
+            }
+
+            $locked->activate($payment);
+
+            return true;
+        });
+    } catch (\RuntimeException $e) {
+        Log::warning('Subscription payment received but calendar not set', [
+            'subscriber_id' => $subscriber->id,
+        ]);
+
+        return response()->json(['status' => 'calendar not set']);
     }
 
     return response()->json(['status' => 'success']);

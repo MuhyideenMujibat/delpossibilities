@@ -2,6 +2,9 @@ import { useState, useEffect, useMemo } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Package, Wallet, Clock, PackageSearch, PlusCircle } from 'lucide-react'
 import { apiFetch, formatNaira, formatDate, filterOrders, PAID_STATUSES, STATUS_LABELS } from '../api'
+import { readCachedData, writeCachedData } from '../offlineCache'
+import ConnectionError from '../components/ConnectionError'
+import { SkeletonRows } from '../components/Skeleton'
 import StatusBadge from '../StatusBadge'
 import PageHeader from '../components/PageHeader'
 import StatCard from '../components/StatCard'
@@ -18,8 +21,10 @@ function redirectToPayment(authorizationUrl) {
 
 function MyOrders({ token }) {
   const navigate = useNavigate()
-  const [orders, setOrders] = useState([])
-  const [loading, setLoading] = useState(true)
+  // Last successful list (if any) shows instantly while fresh data loads.
+  const [orders, setOrders] = useState(() => readCachedData('orders', token) || [])
+  const [loading, setLoading] = useState(() => !readCachedData('orders', token))
+  const [offline, setOffline] = useState(false)
   const [error, setError] = useState('')
   const [payingId, setPayingId] = useState(null)
   const [filters, setFilters] = useState(EMPTY_FILTERS)
@@ -27,28 +32,33 @@ function MyOrders({ token }) {
   const [pageSize, setPageSize] = useState(15)
   const { startPayment: startGatewayPayment, pickerOpen, pickerBusy, chooseGateway, cancelPicker } = usePaymentCheckout(token)
 
-  useEffect(() => {
-    const fetchOrders = async () => {
-      setError('')
+  const fetchOrders = async () => {
+    setError('')
+    setOffline(false)
 
-      try {
-        const response = await apiFetch('/my-orders', { token })
+    try {
+      const response = await apiFetch('/my-orders', { token })
 
-        if (!response.ok) {
-          setError('Could not load your orders.')
-          return
-        }
-
-        const data = await response.json()
-        setOrders(Array.isArray(data) ? data : data.orders || data.data || [])
-      } catch {
-        setError('Could not reach the server.')
-      } finally {
-        setLoading(false)
+      if (!response.ok) {
+        setError('Could not load your orders.')
+        return
       }
-    }
 
+      const data = await response.json()
+      const list = Array.isArray(data) ? data : data.orders || data.data || []
+      setOrders(list)
+      writeCachedData('orders', token, list)
+    } catch {
+      setOffline(true)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchOrders()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token])
 
   const handlePayNow = async (orderId) => {
@@ -71,7 +81,7 @@ function MyOrders({ token }) {
 
       redirectToPayment(data.authorization_url)
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
       setPayingId(null)
     }
   }
@@ -110,10 +120,12 @@ function MyOrders({ token }) {
       </div>
 
       {error && <p className="alert-error mb-6">{error}</p>}
+      {offline && <ConnectionError onRetry={fetchOrders} />}
 
-      {loading && <div className="skeleton h-64 w-full" />}
 
-      {!loading && orders.length === 0 && !error && (
+      {loading && <SkeletonRows rows={5} />}
+
+      {!loading && orders.length === 0 && !error && !offline && (
         <EmptyState
           icon={PackageSearch}
           title="No orders yet"

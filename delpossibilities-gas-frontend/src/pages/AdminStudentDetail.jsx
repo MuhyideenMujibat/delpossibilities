@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { ArrowLeft, Mail, Phone, Home, PackageSearch, Package, Wallet, Clock } from 'lucide-react'
+import { ArrowLeft, Mail, Phone, Home, PackageSearch, Package, Wallet, Clock, BadgeCheck, Gift } from 'lucide-react'
 import { apiFetch, formatNaira, formatDate, STATUS_LABELS } from '../api'
 import PageHeader from '../components/PageHeader'
 import StatCard from '../components/StatCard'
@@ -67,6 +67,17 @@ function AdminStudentDetail({ token }) {
         }
       />
 
+      {student.is_brand_ambassador && (
+        <div className="mb-6 flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+          <BadgeCheck className="mt-0.5 h-4 w-4 flex-shrink-0" strokeWidth={2} />
+          <span>
+            <span className="font-semibold">Official Brand Ambassador</span>
+            {student.brand_ambassador_since && ` since ${formatDate(student.brand_ambassador_since)}`} — issue the
+            ID card and executive gift package if not already sent.
+          </span>
+        </div>
+      )}
+
       <div className="card mb-6">
         <div className="flex flex-col gap-2.5 text-sm">
           <div className="flex items-center gap-2 text-slate-600">
@@ -83,6 +94,29 @@ function AdminStudentDetail({ token }) {
           </div>
         </div>
       </div>
+
+      {(Number(student.referral_commission_balance || 0) > 0 || Number(student.referral_free_kg_balance || 0) > 0) && (
+        <div className="card mb-6">
+          <div className="flex items-center gap-2 mb-3">
+            <Gift className="h-4 w-4 text-brand-teal" strokeWidth={1.8} />
+            <h3 className="text-sm font-semibold text-brand-navy">Referral Rewards</h3>
+          </div>
+          <div className="flex flex-col gap-2 text-sm text-slate-600">
+            {Number(student.referral_commission_balance || 0) > 0 && (
+              <div className="flex items-center justify-between">
+                <span>Cash commission owed</span>
+                <strong className="figure text-brand-navy">{formatNaira(student.referral_commission_balance)}</strong>
+              </div>
+            )}
+            {Number(student.referral_free_kg_balance || 0) > 0 && (
+              <div className="flex items-center justify-between">
+                <span>Free gas credit (auto-applied to their next order)</span>
+                <strong className="figure text-brand-navy">{student.referral_free_kg_balance}kg</strong>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
         <StatCard label="Total Orders" value={orders.length} icon={Package} tone="navy" />

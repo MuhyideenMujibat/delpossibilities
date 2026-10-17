@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { ArrowLeft, PackageX, MapPin, Wallet } from 'lucide-react'
+import { ArrowLeft, PackageX, MapPin, Wallet, Pencil } from 'lucide-react'
+import ConnectionError from '../components/ConnectionError'
+import { SkeletonRows } from '../components/Skeleton'
 import { apiFetch, resolveImageUrl, formatNaira, formatDate, STATUS_LABELS } from '../api'
 import { useToast } from '../toastContext'
 import StatusBadge from '../StatusBadge'
@@ -67,11 +69,28 @@ function OrderDetail({ token }) {
   const [paying, setPaying] = useState(false)
   const { startPayment: startGatewayPayment, pickerOpen, pickerBusy, chooseGateway, cancelPicker } = usePaymentCheckout(token)
 
-  useEffect(() => {
-    apiFetch('/my-orders', { token })
-      .then((res) => (res.ok ? res.json() : Promise.reject()))
+  // Deliberately NOT served from the offline cache (unlike the order list):
+  // this page carries payment state and the Pay button, which must always
+  // reflect the server.
+  const [offline, setOffline] = useState(false)
+
+  const loadOrders = () => {
+    setError('')
+    setOffline(false)
+
+    return apiFetch('/my-orders', { token })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error('http'))))
       .then((data) => setOrders(Array.isArray(data) ? data : data.orders || data.data || []))
-      .catch(() => setError('Could not load this order.'))
+      .catch((err) => {
+        if (err instanceof Error && err.message === 'http') setError('Could not load this order.')
+        else setOffline(true)
+      })
+  }
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadOrders()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token])
 
   const order = orders?.find((o) => String(o.id) === id)
@@ -94,7 +113,7 @@ function OrderDetail({ token }) {
 
       window.location.href = data.authorization_url
     } catch {
-      show('Could not reach the server.', { type: 'error' })
+      show('Check your internet connection.', { type: 'error' })
       setPaying(false)
     }
   }
@@ -111,6 +130,14 @@ function OrderDetail({ token }) {
     return (
       <div className="mx-auto max-w-3xl">
         <div className="skeleton h-72 w-full" />
+      </div>
+    )
+  }
+
+  if (!order && (orders === null || offline) && !error) {
+    return (
+      <div className="mx-auto max-w-3xl">
+        {offline ? <ConnectionError onRetry={loadOrders} /> : <SkeletonRows rows={4} />}
       </div>
     )
   }
@@ -161,7 +188,7 @@ function OrderDetail({ token }) {
         <div className="flex flex-col gap-6 lg:col-span-3">
           {imageSrc && (
             <div className="overflow-hidden rounded-2xl border border-slate-100 shadow-sm">
-              <img src={imageSrc} alt="Cylinder" className="h-56 w-full object-cover" />
+              <img src={imageSrc} alt="Cylinder" width={640} height={224} loading="lazy" decoding="async" className="h-56 w-full object-cover" />
             </div>
           )}
 
@@ -243,9 +270,15 @@ function OrderDetail({ token }) {
             </div>
 
             {order.status === 'pending' && (
-              <button onClick={handlePayNow} disabled={paying} className="btn-primary mt-5 w-full">
-                {paying ? 'Redirecting…' : 'Pay Now'}
-              </button>
+              <div className="mt-5 flex flex-col gap-2">
+                <button onClick={handlePayNow} disabled={paying} className="btn-primary w-full">
+                  {paying ? 'Redirecting…' : 'Pay Now'}
+                </button>
+                <Link to={`/orders/${order.id}/edit`} className="btn-outline w-full">
+                  <Pencil className="h-4 w-4" strokeWidth={1.8} />
+                  Not satisfied? Edit this order
+                </Link>
+              </div>
             )}
           </div>
 

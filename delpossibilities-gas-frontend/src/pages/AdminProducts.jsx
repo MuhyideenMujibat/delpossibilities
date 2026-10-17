@@ -151,7 +151,7 @@ function ProductFormDialog({ open, group, product, onClose, onSaved, token }) {
       show(product ? 'Product updated.' : 'Product added.', { type: 'success' })
       onSaved()
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setSaving(false)
     }
@@ -338,7 +338,7 @@ function AdminProducts({ token }) {
       setProducts(await response.json())
       setError('')
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setLoading(false)
     }
@@ -380,7 +380,7 @@ function AdminProducts({ token }) {
       const updated = await response.json()
       setProducts((prev) => prev.map((p) => (p.id === updated.id ? updated : p)))
     } catch {
-      show('Could not reach the server.', { type: 'error' })
+      show('Check your internet connection.', { type: 'error' })
     } finally {
       setTogglingId(null)
     }
@@ -402,7 +402,7 @@ function AdminProducts({ token }) {
       setDeleteTarget(null)
       show('Product removed.', { type: 'success' })
     } catch {
-      show('Could not reach the server.', { type: 'error' })
+      show('Check your internet connection.', { type: 'error' })
     } finally {
       setDeleting(false)
     }
@@ -464,6 +464,7 @@ function AdminProducts({ token }) {
 
       {error && <p className="alert-error mb-6">{error}</p>}
 
+
       {loading && <div className="skeleton h-64 w-full" />}
 
       {!loading && filteredProducts.length === 0 && !error && (
@@ -476,7 +477,7 @@ function AdminProducts({ token }) {
             {visibleProducts.map((product) => (
               <div key={product.id} className="card flex flex-col p-4">
                 {product.image_url ? (
-                  <img src={product.image_url} alt="" className="mb-3 h-32 w-full rounded-lg object-cover" />
+                  <img src={product.image_url} alt="" width={640} height={128} loading="lazy" decoding="async" className="mb-3 h-32 w-full rounded-lg object-cover" />
                 ) : (
                   <div className="mb-3 flex h-32 w-full items-center justify-center rounded-lg bg-slate-100 text-xs text-slate-400">
                     No image

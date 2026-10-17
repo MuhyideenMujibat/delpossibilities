@@ -30,7 +30,7 @@ class AdminProductController extends Controller
         $validated = $this->validateProduct($request);
 
         if ($request->hasFile('image')) {
-            $validated['image_path'] = $request->file('image')->store('products', 'public');
+            $validated['image_path'] = \App\Support\ImageOptimizer::store($request->file('image'), 'products');
         }
 
         $product = Product::create($validated);
@@ -45,7 +45,7 @@ class AdminProductController extends Controller
         $oldImage = null;
         if ($request->hasFile('image')) {
             $oldImage = $product->image_path;
-            $validated['image_path'] = $request->file('image')->store('products', 'public');
+            $validated['image_path'] = \App\Support\ImageOptimizer::store($request->file('image'), 'products');
         }
 
         $product->update($validated);
@@ -90,7 +90,7 @@ class AdminProductController extends Controller
             'price' => [$requiredOrSometimes, 'numeric', 'min:0'],
             'is_active' => ['sometimes', 'boolean'],
             'sort_order' => ['sometimes', 'integer', 'min:0'],
-            'image' => ['nullable', 'image', 'max:5120'],
+            'image' => ['nullable', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
         ]);
     }
 

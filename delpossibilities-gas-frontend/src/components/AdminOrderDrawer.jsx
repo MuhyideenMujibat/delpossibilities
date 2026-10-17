@@ -1,14 +1,18 @@
-import { X, Mail, Phone, MapPin, Home, MessageCircle, ShoppingBag } from 'lucide-react'
+import { useState } from 'react'
+import { X, Mail, Phone, MapPin, Home, MessageCircle, ShoppingBag, Expand, Trash2 } from 'lucide-react'
 import { resolveImageUrl, formatNaira, formatDate, STATUS_LABELS, whatsappUrl } from '../api'
 import StatusBadge from '../StatusBadge'
 import OrderTimeline from './OrderTimeline'
+import ImageLightbox from './ImageLightbox'
 
 const NEXT_STATUS_LABEL = {
   approved: 'Picked Up',
   picked_up: 'Delivered',
 }
 
-function AdminOrderDrawer({ order, onClose, onAdvance, updating, nextStatus }) {
+function AdminOrderDrawer({ order, onClose, onAdvance, updating, nextStatus, onDelete }) {
+  const [lightboxOpen, setLightboxOpen] = useState(false)
+
   if (!order) return null
 
   const imageSrc = resolveImageUrl(order.cylinder_image_url)
@@ -36,9 +40,17 @@ function AdminOrderDrawer({ order, onClose, onAdvance, updating, nextStatus }) {
 
         <div className="flex-1 overflow-y-auto px-5 py-5">
           {imageSrc && (
-            <div className="mb-5 overflow-hidden rounded-2xl border border-slate-100">
-              <img src={imageSrc} alt="Cylinder" className="h-48 w-full object-cover" />
-            </div>
+            <button
+              type="button"
+              onClick={() => setLightboxOpen(true)}
+              className="group relative mb-5 block w-full overflow-hidden rounded-2xl border border-slate-100"
+            >
+              <img src={imageSrc} alt="Cylinder" width={640} height={192} loading="lazy" decoding="async" className="h-48 w-full object-cover" />
+              <span className="absolute inset-0 flex items-center justify-center gap-1.5 bg-black/0 text-sm font-medium text-white opacity-0 transition-colors group-hover:bg-black/40 group-hover:opacity-100">
+                <Expand className="h-4 w-4" strokeWidth={2} />
+                View full image
+              </span>
+            </button>
           )}
 
           <div className="mb-5 flex items-center justify-between gap-2">
@@ -170,13 +182,19 @@ function AdminOrderDrawer({ order, onClose, onAdvance, updating, nextStatus }) {
           )}
         </div>
 
-        {(chatUrl || nextStatus) && (
+        {(chatUrl || nextStatus || (order.status === 'pending' && onDelete)) && (
           <div className="flex gap-2 border-t border-slate-100 px-5 py-4">
             {chatUrl && (
               <a href={chatUrl} target="_blank" rel="noreferrer" className="btn-outline flex-1">
                 <MessageCircle className="h-4 w-4" strokeWidth={2} />
                 WhatsApp
               </a>
+            )}
+            {order.status === 'pending' && onDelete && (
+              <button onClick={() => onDelete(order)} className="btn-ghost text-red-500 hover:bg-red-50 hover:text-red-600">
+                <Trash2 className="h-4 w-4" strokeWidth={1.8} />
+                Delete
+              </button>
             )}
             {nextStatus && (
               <button onClick={onAdvance} disabled={updating} className="btn-primary w-full">
@@ -186,6 +204,8 @@ function AdminOrderDrawer({ order, onClose, onAdvance, updating, nextStatus }) {
           </div>
         )}
       </aside>
+
+      <ImageLightbox src={imageSrc} alt={`Cylinder for order ${order.id}`} open={lightboxOpen} onClose={() => setLightboxOpen(false)} />
     </div>
   )
 }

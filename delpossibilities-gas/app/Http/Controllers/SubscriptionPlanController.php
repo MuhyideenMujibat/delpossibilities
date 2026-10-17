@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\SubscriptionPlan;
+use App\Support\CatalogCache;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
@@ -11,7 +12,7 @@ class SubscriptionPlanController extends Controller
     public function index()
     {
         return response()->json(
-            SubscriptionPlan::orderBy('package_type')->orderBy('price')->get()
+            CatalogCache::remember('plans', fn () => SubscriptionPlan::orderBy('package_type')->orderBy('price')->get())
         );
     }
 

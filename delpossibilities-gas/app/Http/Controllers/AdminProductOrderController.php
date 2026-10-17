@@ -18,7 +18,7 @@ class AdminProductOrderController extends Controller
     {
         // hasOne relations need their FK column (product_order_id) in the
         // constrained select too, or Eloquent can't match the row back.
-        $query = ProductOrder::with(['user', 'items', 'order:id,status,product_order_id', 'refill:id,status,product_order_id']);
+        $query = ProductOrder::with(['user.permissions', 'items', 'order:id,status,product_order_id', 'refill:id,status,product_order_id']);
 
         $status = $request->input('status', 'approved');
         if ($status !== 'all') {

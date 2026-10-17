@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { ShoppingCart } from 'lucide-react'
 import { apiFetch, formatNaira } from './api'
+import { publicFetch } from './publicData'
 import HeaderUserMenu from './HeaderUserMenu'
 import NotificationBell from './NotificationBell'
 import { useCart } from './cartContext'
@@ -25,7 +26,7 @@ function DashboardTopbar({ token, role, onLogout }) {
   useEffect(() => {
     let cancelled = false
 
-    apiFetch('/price')
+    publicFetch('/price')
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (cancelled || !data) return

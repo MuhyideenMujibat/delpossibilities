@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { TrendingUp, ShieldCheck, CalendarRange, MessageCircle, Landmark, Copy, Check } from 'lucide-react'
 import { apiFetch, formatNaira, whatsappUrl } from '../../api'
+import { publicFetch } from '../../publicData'
 import { setPostAuthRedirect } from '../../authRedirect'
 import Reveal from '../motion/Reveal'
 
@@ -57,7 +58,7 @@ function InvestmentPreview({ token, onCreated }) {
   useEffect(() => {
     let cancelled = false
 
-    apiFetch('/price')
+    publicFetch('/price')
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (cancelled || !data) return
@@ -161,7 +162,7 @@ function InvestmentPreview({ token, onCreated }) {
       setSubmitted(true)
       onCreated?.(data)
     } catch {
-      setSubmitError('Could not reach the server.')
+      setSubmitError('Check your internet connection.')
     } finally {
       setSubmitting(false)
     }

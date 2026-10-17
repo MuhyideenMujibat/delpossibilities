@@ -1,12 +1,27 @@
 import { useState, useEffect, useMemo } from 'react'
-import { CalendarCheck, Search, Users, Flame, Wallet, AlarmClock, X, MessageCircle, Phone } from 'lucide-react'
+import { CalendarCheck, Search, Users, Flame, Wallet, AlarmClock, X, MessageCircle, Phone, UserPlus, Trash2 } from 'lucide-react'
 import { apiFetch, formatNaira, formatDate, whatsappUrl } from '../api'
 import PageHeader from '../components/PageHeader'
 import StatCard from '../components/StatCard'
 import EmptyState from '../components/EmptyState'
 import StatusBadge from '../StatusBadge'
 import PaginationControls from '../components/PaginationControls'
+import AddSubscriberModal from '../components/AddSubscriberModal'
+import ConfirmDialog from '../components/ConfirmDialog'
 import { paginate } from '../pagination'
+
+// A subscription can be cancelled from the admin side only while it's still
+// awaiting payment (the student abandoned checkout, nothing was ever
+// charged), or when it was granted manually by an admin in the first place
+// (see AdminSubscriberController::store — a sponsored slot, goodwill
+// gesture, etc., identifiable by carrying a SubscriptionPayment with
+// method 'manual'). A genuinely paid, real subscription can't be cancelled
+// this way — mirrors the backend's own guard in SubscriberController::cancel.
+function isCancellable(subscriber) {
+  if (subscriber.status === 'cancelled') return false
+  if (subscriber.status === 'pending') return true
+  return (subscriber.payments || []).some((payment) => payment.method === 'manual')
+}
 
 const TIER_LABELS = { bronze: 'Bronze', silver: 'Silver', gold: 'Gold' }
 const PACKAGE_LABELS = { session: 'Session', semester: 'Semester' }
@@ -44,7 +59,7 @@ function ContactLinks({ subscriber }) {
     </span>
   )
 }
-const STATUS_LABELS = { pending: 'Pending Payment', active: 'Active', expired: 'Expired' }
+const STATUS_LABELS = { pending: 'Pending Payment', active: 'Active', expired: 'Expired', cancelled: 'Cancelled' }
 
 const EMPTY_FILTERS = { search: '', packageType: 'all', tier: 'all', status: 'all', expiry: 'all' }
 
@@ -87,6 +102,9 @@ function AdminSubscribers({ token }) {
   const [filters, setFilters] = useState(EMPTY_FILTERS)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(15)
+  const [addModalOpen, setAddModalOpen] = useState(false)
+  const [cancelTarget, setCancelTarget] = useState(null)
+  const [cancelling, setCancelling] = useState(false)
 
   useEffect(() => {
     const load = async () => {
@@ -109,7 +127,7 @@ function AdminSubscribers({ token }) {
         }
         setError('')
       } catch {
-        setError('Could not reach the server.')
+        setError('Check your internet connection.')
       } finally {
         setLoading(false)
       }
@@ -123,6 +141,44 @@ function AdminSubscribers({ token }) {
     setPage(1)
   }
 
+  // The stat cards (Active, Revenue, Expiring) and the tier/package
+  // breakdowns come from server-side reports, not from the rows in state —
+  // so after any change that moves them (cancelling or manually adding a
+  // subscriber) they have to be re-fetched, or they stay stale until reload.
+  const refreshReports = async () => {
+    try {
+      const response = await apiFetch('/admin/subscription-reports', { token })
+      if (response.ok) setReports(await response.json())
+    } catch {
+      // Keep showing the last known figures; the next load corrects them.
+    }
+  }
+
+  const handleCancel = async () => {
+    if (!cancelTarget) return
+    setCancelling(true)
+    setError('')
+
+    try {
+      const response = await apiFetch(`/admin/subscribers/${cancelTarget.id}/cancel`, { method: 'PATCH', token })
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => null)
+        setError(data?.message || 'Could not cancel this subscription.')
+        return
+      }
+
+      const updated = await response.json()
+      setSubscribers((prev) => prev.map((s) => (s.id === updated.id ? updated : s)))
+      setCancelTarget(null)
+      refreshReports()
+    } catch {
+      setError('Check your internet connection.')
+    } finally {
+      setCancelling(false)
+    }
+  }
+
   const filteredSubscribers = useMemo(() => filterSubscribers(subscribers, filters), [subscribers, filters])
   const pageCount = Math.max(1, Math.ceil(filteredSubscribers.length / pageSize))
   const visibleSubscribers = useMemo(
@@ -130,6 +186,14 @@ function AdminSubscribers({ token }) {
     [filteredSubscribers, page, pageCount, pageSize]
   )
 
+  // Excludes a cancelled row (see isCancellable/handleCancel above) — a
+  // voided subscription (abandoned pending checkout, or a manual grant
+  // undone) shouldn't keep counting toward how many subscriptions this
+  // platform has actually served.
+  const totalSubscribers = useMemo(
+    () => subscribers.filter((subscriber) => subscriber.status !== 'cancelled').length,
+    [subscribers]
+  )
   const totalActive = useMemo(
     () => Object.values(reports?.active_by_tier || {}).reduce((sum, count) => sum + Number(count), 0),
     [reports]
@@ -149,10 +213,16 @@ function AdminSubscribers({ token }) {
         title="Subscribers"
         subtitle="Every session/semester subscriber, with plan, status, and expiry at a glance."
         icon={CalendarCheck}
+        action={
+          <button onClick={() => setAddModalOpen(true)} className="btn-primary">
+            <UserPlus className="h-4 w-4" strokeWidth={2} />
+            Add Subscriber
+          </button>
+        }
       />
 
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Total Subscribers" value={subscribers.length} icon={Users} tone="navy" />
+        <StatCard label="Total Subscribers" value={totalSubscribers} icon={Users} tone="navy" />
         <StatCard label="Active" value={totalActive} icon={Flame} tone="teal" />
         <StatCard label="Total Revenue" value={formatNaira(totalRevenue)} icon={Wallet} tone="accent" />
         <StatCard label="Expiring in 30 Days" value={expiringSoonCount} icon={AlarmClock} tone="amber" />
@@ -199,6 +269,7 @@ function AdminSubscribers({ token }) {
       )}
 
       {error && <p className="alert-error mb-6">{error}</p>}
+
 
       {loading && <div className="skeleton h-64 w-full" />}
 
@@ -277,6 +348,7 @@ function AdminSubscribers({ token }) {
                       <th className="th-cell">Locked Price</th>
                       <th className="th-cell">Status</th>
                       <th className="th-cell">Ends</th>
+                      <th className="th-cell"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -288,12 +360,35 @@ function AdminSubscribers({ token }) {
                         <td className="px-4 py-3 text-slate-600">
                           {TIER_LABELS[subscriber.plan?.tier] || subscriber.plan?.tier} · {PACKAGE_LABELS[subscriber.plan?.package_type] || subscriber.plan?.package_type}
                         </td>
-                        <td className="figure px-4 py-3 text-brand-navy">{formatNaira(subscriber.locked_price)}</td>
+                        <td
+                          className="figure px-4 py-3 text-brand-navy"
+                          title={
+                            Number(subscriber.referral_discount_amount) > 0
+                              ? `Plan price ${formatNaira(subscriber.locked_price)}, minus ${formatNaira(subscriber.referral_discount_amount)} referral discount`
+                              : undefined
+                          }
+                        >
+                          {formatNaira(subscriber.total_amount ?? subscriber.locked_price)}
+                          {Number(subscriber.referral_discount_amount) > 0 && (
+                            <span className="ml-1 text-xs font-medium text-brand-teal">(discounted)</span>
+                          )}
+                        </td>
                         <td className="px-4 py-3">
                           <StatusBadge status={subscriber.status} label={STATUS_LABELS[subscriber.status] || subscriber.status} />
                         </td>
                         <td className="whitespace-nowrap px-4 py-3 text-xs text-slate-400">
                           {subscriber.ends_at ? formatDate(subscriber.ends_at) : '—'}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          {isCancellable(subscriber) && (
+                            <button
+                              onClick={() => setCancelTarget(subscriber)}
+                              aria-label="Cancel subscription"
+                              className="btn-ghost text-red-500 hover:bg-red-50 hover:text-red-600"
+                            >
+                              <Trash2 className="h-4 w-4" strokeWidth={1.8} />
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -315,13 +410,27 @@ function AdminSubscribers({ token }) {
                       <span>
                         {TIER_LABELS[subscriber.plan?.tier] || subscriber.plan?.tier} · {PACKAGE_LABELS[subscriber.plan?.package_type] || subscriber.plan?.package_type}
                       </span>
-                      <span className="figure">{formatNaira(subscriber.locked_price)}</span>
+                      <span className="figure">
+                        {formatNaira(subscriber.total_amount ?? subscriber.locked_price)}
+                        {Number(subscriber.referral_discount_amount) > 0 && (
+                          <span className="ml-1 text-xs font-medium text-brand-teal">(discounted)</span>
+                        )}
+                      </span>
                     </div>
                     <p className="mt-1 text-xs text-slate-400">
                       {subscriber.ends_at ? `Ends ${formatDate(subscriber.ends_at)}` : 'No end date yet'}
                     </p>
-                    <div className="mt-3">
+                    <div className="mt-3 flex items-center justify-between gap-2">
                       <ContactLinks subscriber={subscriber} />
+                      {isCancellable(subscriber) && (
+                        <button
+                          onClick={() => setCancelTarget(subscriber)}
+                          aria-label="Cancel subscription"
+                          className="btn-ghost flex-shrink-0 text-red-500 hover:bg-red-50 hover:text-red-600"
+                        >
+                          <Trash2 className="h-4 w-4" strokeWidth={1.8} />
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -341,6 +450,32 @@ function AdminSubscribers({ token }) {
           )}
         </>
       )}
+
+      <AddSubscriberModal
+        open={addModalOpen}
+        onClose={() => setAddModalOpen(false)}
+        token={token}
+        subscribers={subscribers}
+        onCreated={(subscriber) => {
+          setSubscribers((prev) => [subscriber, ...prev])
+          refreshReports()
+        }}
+      />
+
+      <ConfirmDialog
+        open={!!cancelTarget}
+        title={cancelTarget ? `Cancel ${cancelTarget.customer_id}'s subscription?` : ''}
+        message={
+          cancelTarget?.status === 'pending'
+            ? "This subscription hasn't been paid for yet — cancelling just clears it so the student can start a fresh one."
+            : 'This was added manually — cancelling ends it immediately and the student loses any remaining kg on it.'
+        }
+        confirmLabel="Cancel Subscription"
+        tone="danger"
+        busy={cancelling}
+        onConfirm={handleCancel}
+        onCancel={() => setCancelTarget(null)}
+      />
     </div>
   )
 }

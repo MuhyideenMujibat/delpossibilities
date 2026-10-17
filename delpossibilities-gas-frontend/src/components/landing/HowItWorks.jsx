@@ -4,7 +4,7 @@ import Reveal, { RevealItem } from '../motion/Reveal'
 const STEPS = [
   { icon: Scale, title: 'Enter your refill size', description: 'Tell us how many kg you need, pick a common size or enter your own.' },
   { icon: ImagePlus, title: 'Upload your cylinder', description: 'A quick photo so our riders know exactly what to pick up.' },
-  { icon: ShieldCheck, title: 'Pay securely', description: 'Checkout with Paystack. Your payment is confirmed before we move.' },
+  { icon: ShieldCheck, title: 'Pay securely', description: 'Checkout securely online. Your payment is confirmed before we move.' },
   { icon: Truck, title: 'Get your gas delivered', description: 'We refill it and bring it straight back to your hostel door.' },
 ]
 

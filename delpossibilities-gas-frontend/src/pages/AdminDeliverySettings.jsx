@@ -33,7 +33,7 @@ function DeliveryZonesTab({ token }) {
       setZones(await response.json())
       setError('')
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setLoading(false)
     }
@@ -68,7 +68,7 @@ function DeliveryZonesTab({ token }) {
       setFee('')
       await fetchZones()
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setSaving(false)
     }
@@ -89,7 +89,7 @@ function DeliveryZonesTab({ token }) {
       const updated = await response.json()
       setZones((prev) => prev.map((z) => (z.id === updated.id ? updated : z)))
     } catch {
-      show('Could not reach the server.', { type: 'error' })
+      show('Check your internet connection.', { type: 'error' })
     } finally {
       setTogglingId(null)
     }
@@ -107,7 +107,7 @@ function DeliveryZonesTab({ token }) {
       setZones((prev) => prev.filter((z) => z.id !== deleteTarget.id))
       setDeleteTarget(null)
     } catch {
-      show('Could not reach the server.', { type: 'error' })
+      show('Check your internet connection.', { type: 'error' })
     } finally {
       setDeleting(false)
     }
@@ -149,6 +149,7 @@ function DeliveryZonesTab({ token }) {
         </form>
         {error && <p className="alert-error mt-4">{error}</p>}
       </div>
+
 
       {loading && <div className="skeleton h-40 w-full" />}
 
@@ -234,7 +235,7 @@ function TierForm({ token, onSaved }) {
       setFee('')
       onSaved()
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setSaving(false)
     }
@@ -317,7 +318,7 @@ function EazyMarketTiersTab({ token }) {
       setTiers(await response.json())
       setError('')
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setLoading(false)
     }
@@ -346,7 +347,7 @@ function EazyMarketTiersTab({ token }) {
       const updated = await response.json()
       setTiers((prev) => prev.map((t) => (t.id === updated.id ? updated : t)))
     } catch {
-      show('Could not reach the server.', { type: 'error' })
+      show('Check your internet connection.', { type: 'error' })
     } finally {
       setTogglingId(null)
     }
@@ -364,7 +365,7 @@ function EazyMarketTiersTab({ token }) {
       setTiers((prev) => prev.filter((t) => t.id !== deleteTarget.id))
       setDeleteTarget(null)
     } catch {
-      show('Could not reach the server.', { type: 'error' })
+      show('Check your internet connection.', { type: 'error' })
     } finally {
       setDeleting(false)
     }
@@ -377,6 +378,7 @@ function EazyMarketTiersTab({ token }) {
       </div>
 
       {error && <p className="alert-error mb-4">{error}</p>}
+
 
       {loading && <div className="skeleton h-40 w-full" />}
 

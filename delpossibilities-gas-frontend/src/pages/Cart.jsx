@@ -2,11 +2,14 @@ import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ShoppingCart, Minus, Plus, Trash2, ArrowRight, PlusCircle, Gift } from 'lucide-react'
 import { apiFetch, formatNaira, resolveImageUrl } from '../api'
+import { publicFetch } from '../publicData'
 import { useCart } from '../cartContext'
 import { useCurrentUser } from '../userContext'
 import { useToast } from '../toastContext'
 import PageHeader from '../components/PageHeader'
 import EmptyState from '../components/EmptyState'
+import PaymentGatewayModal from '../components/PaymentGatewayModal'
+import { usePaymentCheckout } from '../hooks/usePaymentCheckout'
 
 function useEazyMarketTiers() {
   const [tiers, setTiers] = useState([])
@@ -14,7 +17,7 @@ function useEazyMarketTiers() {
   useEffect(() => {
     let cancelled = false
 
-    apiFetch('/eazy-market-delivery-tiers')
+    publicFetch('/eazy-market-delivery-tiers')
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => {
         if (!cancelled) setTiers(Array.isArray(data) ? data : [])
@@ -35,7 +38,7 @@ function CartLine({ item }) {
   return (
     <div className="flex items-center gap-3 rounded-xl border border-slate-100 bg-white p-3">
       {item.snapshot.image_url ? (
-        <img src={resolveImageUrl(item.snapshot.image_url)} alt="" className="h-14 w-14 flex-shrink-0 rounded-lg object-cover" />
+        <img src={resolveImageUrl(item.snapshot.image_url)} alt="" width={56} height={56} loading="lazy" decoding="async" className="h-14 w-14 flex-shrink-0 rounded-lg object-cover" />
       ) : (
         <div className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-lg bg-slate-100 text-[10px] text-slate-400">
           No image
@@ -84,6 +87,7 @@ function Cart({ token }) {
   const navigate = useNavigate()
   const tiers = useEazyMarketTiers()
   const { user } = useCurrentUser()
+  const { startPayment: startGatewayPayment, pickerOpen, pickerBusy, chooseGateway, cancelPicker } = usePaymentCheckout(token)
   const [checkingOut, setCheckingOut] = useState(false)
   const [error, setError] = useState('')
   const [subscriber, setSubscriber] = useState(null)
@@ -164,18 +168,24 @@ function Cart({ token }) {
 
       cart.clear()
 
-      const payResponse = await apiFetch(`/product-orders/${productOrder.id}/pay`, { method: 'POST', token })
-      const payData = await payResponse.json().catch(() => null)
+      // Honours the admin's gateway settings: straight to the one enabled
+      // gateway, or a picker when both are on.
+      const { ok, data: payData, gateway, cancelled } = await startGatewayPayment('productOrder', productOrder.id)
 
-      if (!payResponse.ok || !payData?.authorization_url) {
-        show('Order created, but payment could not start. Please try again.', { type: 'error' })
+      if (cancelled) {
+        show('Order created, but payment was not started. Please try again.', { type: 'error' })
         return
       }
 
-      show('Redirecting you to Paystack…', { type: 'success', duration: 2500 })
+      if (!ok || !payData?.authorization_url) {
+        show(payData?.message || 'Order created, but payment could not start. Please try again.', { type: 'error' })
+        return
+      }
+
+      show(`Redirecting you to ${gateway === 'flutterwave' ? 'Flutterwave' : 'Paystack'}…`, { type: 'success', duration: 2500 })
       window.location.href = payData.authorization_url
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setCheckingOut(false)
     }
@@ -190,6 +200,10 @@ function Cart({ token }) {
           title="Your cart is empty"
           description="Browse Gas Services and Eazy Market on the Shop page to add items."
         />
+        {/* The cart is cleared the moment checkout creates the order, which lands
+            here while the gateway picker is still open — it must render in this
+            view too or the picker never appears (both gateways on). */}
+        <PaymentGatewayModal open={pickerOpen} busy={pickerBusy} onChoose={chooseGateway} onCancel={cancelPicker} />
       </div>
     )
   }
@@ -290,6 +304,7 @@ function Cart({ token }) {
           </button>
         )}
       </div>
+      <PaymentGatewayModal open={pickerOpen} busy={pickerBusy} onChoose={chooseGateway} onCancel={cancelPicker} />
     </div>
   )
 }

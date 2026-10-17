@@ -16,6 +16,7 @@ class PendingRegistration extends Model
         'referred_by_customer_id',
         'otp_code',
         'otp_expires_at',
+        'otp_attempts',
     ];
 
     protected $hidden = [

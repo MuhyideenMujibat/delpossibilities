@@ -11,6 +11,9 @@ class Subscriber extends Model
         'user_id',
         'subscription_plan_id',
         'locked_price',
+        'referral_discount_amount',
+        'referral_percent_used',
+        'total_amount',
         'payment_gateway',
         'status',
         'starts_at',
@@ -25,6 +28,9 @@ class Subscriber extends Model
     {
         return [
             'locked_price' => 'decimal:2',
+            'referral_discount_amount' => 'decimal:2',
+            'referral_percent_used' => 'decimal:2',
+            'total_amount' => 'decimal:2',
             'starts_at' => 'datetime',
             'ends_at' => 'datetime',
             'remaining_kg' => 'decimal:2',
@@ -112,11 +118,13 @@ class Subscriber extends Model
 
         $payment->update(['paid_at' => now()]);
 
-        // The other qualifying event for the referrer's coupon, alongside a
-        // 3 kg+ gas order (see User::grantReferralRewardForSubscription) —
-        // idempotent per referred student regardless of which trigger fires
-        // first, or how many times this account subscribes afterward.
-        $this->user->grantReferralRewardForSubscription();
+        // Referral reward deliberately NOT granted here — activating a
+        // subscription has no kg of its own (just an allotment, not yet
+        // drawn on). If this referred student's subscription is what ends
+        // up qualifying their referrer, it's their FIRST delivered refill
+        // that actually triggers it, with that refill's real kg (see
+        // User::grantReferralRewardForRefill, called from
+        // RefillController::update).
     }
 
     // The current session/semester calendar (admin-configured on Settings)

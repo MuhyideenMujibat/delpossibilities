@@ -69,7 +69,7 @@ function CylinderImageUpload({ token, initialImageUrl = null, description, onUpl
       }
     } catch {
       setIsError(true)
-      setMessage('Could not reach the server.')
+      setMessage('Check your internet connection.')
     } finally {
       setUploading(false)
     }

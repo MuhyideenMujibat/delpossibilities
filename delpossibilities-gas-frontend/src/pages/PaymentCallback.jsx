@@ -183,7 +183,7 @@ function PaymentCallback({ token }) {
         if (!response.ok) throw new Error()
         const match = await response.json()
 
-        if (!match || match.paystack_reference !== reference) {
+        if (!match || (match.paystack_reference !== reference && match.flutterwave_tx_ref !== reference)) {
           if (!cancelled) setPhase('unknown')
           return
         }
@@ -196,7 +196,17 @@ function PaymentCallback({ token }) {
           return
         }
 
-        const verifyResponse = await apiFetch(`/product-orders/${match.id}/verify-payment`, { method: 'POST', token })
+        const usingFlutterwave = match.payment_gateway === 'flutterwave' || isFlutterwaveRedirect
+        if (usingFlutterwave && !transactionId) {
+          // No transaction id to verify with (stale/direct reload of this URL).
+          if (!cancelled) setProductOrder(match)
+          if (!cancelled) setPhase('unknown')
+          return
+        }
+
+        const verifyResponse = usingFlutterwave
+          ? await apiFetch(`/product-orders/${match.id}/verify-flutterwave-payment`, { method: 'POST', token, body: { transaction_id: transactionId } })
+          : await apiFetch(`/product-orders/${match.id}/verify-payment`, { method: 'POST', token })
         const verifyData = await verifyResponse.json().catch(() => null)
 
         if (cancelled) return
@@ -207,7 +217,7 @@ function PaymentCallback({ token }) {
           return
         }
 
-        if (verifyResponse.ok && ['failed', 'abandoned'].includes(verifyData?.paystack_status)) {
+        if (verifyResponse.ok && FAILED_STATUSES.includes(verifyData?.paystack_status || verifyData?.flutterwave_status)) {
           setProductOrder(match)
           setPhase('failed')
           return
@@ -347,9 +357,21 @@ function PaymentCallback({ token }) {
                   <span className="text-slate-500">Customer ID</span>
                   <span className="figure font-medium text-brand-navy">{subscription.customer_id}</span>
                 </div>
+                {Number(subscription.referral_discount_amount) > 0 && (
+                  <>
+                    <div className="mt-1 flex items-center justify-between">
+                      <span className="text-slate-500">Plan price</span>
+                      <span className="figure font-medium text-brand-navy">{formatNaira(subscription.locked_price)}</span>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between">
+                      <span className="text-brand-teal">Referral discount</span>
+                      <span className="figure font-medium text-brand-teal">&minus;{formatNaira(subscription.referral_discount_amount)}</span>
+                    </div>
+                  </>
+                )}
                 <div className="mt-1 flex items-center justify-between">
                   <span className="text-slate-500">Amount paid</span>
-                  <span className="figure font-medium text-brand-navy">{formatNaira(subscription.locked_price)}</span>
+                  <span className="figure font-medium text-brand-navy">{formatNaira(subscription.total_amount ?? subscription.locked_price)}</span>
                 </div>
               </div>
             )}

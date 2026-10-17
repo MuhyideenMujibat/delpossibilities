@@ -4,7 +4,9 @@ namespace App\Http\Controllers;
 
 use App\Models\ProductOrder;
 use App\Models\Refill;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -12,6 +14,23 @@ use Illuminate\Validation\ValidationException;
 class RefillController extends Controller
 {
     public function store(Request $request)
+    {
+        // Same reasoning as OrderController::store's lock — serializes the
+        // pending-refill check below against a genuinely concurrent
+        // resubmission from the same user, which could otherwise both read
+        // "no pending refill" before either commits and create two.
+        try {
+            return Cache::lock('refill-create:'.$request->user()->id, 10)->block(5, function () use ($request) {
+                return $this->storeRefill($request);
+            });
+        } catch (LockTimeoutException) {
+            return response()->json([
+                'message' => 'Still processing your last request — please try again in a moment.',
+            ], 429);
+        }
+    }
+
+    private function storeRefill(Request $request)
     {
         // The usable subscription first — an account can hold more than one
         // 'active' row (e.g. a transfer recipient who still has their own
@@ -43,7 +62,7 @@ class RefillController extends Controller
             'kg' => ['required', 'numeric', 'min:0.01', 'max:'.$subscriber->remaining_kg],
             'product_order_id' => ['nullable', 'integer', 'exists:product_orders,id'],
             'attached_product_order_id' => ['nullable', 'integer', 'different:product_order_id', 'exists:product_orders,id'],
-            'cylinder_image' => ['nullable', 'image', 'max:5120'],
+            'cylinder_image' => ['nullable', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
         ]);
 
         // A refill is a delivery just like a normal gas order — the rider
@@ -60,7 +79,7 @@ class RefillController extends Controller
         // default, so "upload or update it" sticks for next time.
         if ($request->hasFile('cylinder_image')) {
             $oldImage = $user->cylinder_image;
-            $cylinderImage = $request->file('cylinder_image')->store('cylinders/profile', 'public');
+            $cylinderImage = \App\Support\ImageOptimizer::store($request->file('cylinder_image'), 'cylinders/profile');
             $user->update(['cylinder_image' => $cylinderImage]);
             if ($oldImage) {
                 Storage::disk('public')->delete($oldImage);
@@ -148,7 +167,7 @@ class RefillController extends Controller
     // widened with ?status=all or a specific status.
     public function index(Request $request)
     {
-        $query = Refill::with(['subscriber.user', 'subscriber.plan', 'productOrder.items', 'attachedProductOrder.items']);
+        $query = Refill::with(['subscriber.user.permissions', 'subscriber.plan', 'productOrder.items', 'attachedProductOrder.items']);
 
         $status = $request->input('status', 'pending');
         if ($status !== 'all') {
@@ -203,6 +222,15 @@ class RefillController extends Controller
             $refill->subscriber->update([
                 'remaining_kg' => max(0, (float) $refill->subscriber->remaining_kg - $kgDelivered),
             ]);
+        }
+
+        // A subscriber's referral reward isn't tied to signing up — it's
+        // this, their first ACTUAL delivered kg, that counts (see
+        // User::grantReferralRewardForRefill). Idempotent per referred
+        // student regardless of whether a gas order or a refill gets there
+        // first, or how many refills/orders follow.
+        if ($isDelivering) {
+            $refill->user->grantReferralRewardForRefill($refill->fresh());
         }
 
         // Any cart riding on this same delivery trip — bundled or attached.

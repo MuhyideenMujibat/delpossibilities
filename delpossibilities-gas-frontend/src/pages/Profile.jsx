@@ -1,11 +1,14 @@
-import { useState, useEffect } from 'react'
-import { UserCircle, MapPin, Gift, Copy, Check, Crown, Gem } from 'lucide-react'
-import { apiFetch } from '../api'
+import { useState, useEffect, useRef } from 'react'
+import { UserCircle, MapPin, Gift, Copy, Check, Crown, Gem, Wallet, Flame, BadgeCheck, Share2 } from 'lucide-react'
+import { apiFetch, formatNaira } from '../api'
+import { readCachedData, writeCachedData } from '../offlineCache'
+import ConnectionError from '../components/ConnectionError'
 import CylinderImageUpload from '../CylinderImageUpload'
 import ChangePasswordForm from '../components/ChangePasswordForm'
 import PageHeader from '../components/PageHeader'
 import HostelSelect from '../HostelSelect'
 import LocationTypeToggle from '../components/LocationTypeToggle'
+import ReferralShareModal from '../components/ReferralShareModal'
 
 // Mirrors User::TIER_VIP / TIER_VVIP (see AdminUsers.jsx's MEMBERSHIP_TIERS
 // for the admin-side equivalent). 'none' renders nothing — most students
@@ -39,6 +42,19 @@ function Profile({ token }) {
   // Can exceed 100% (e.g. two referrals at 70% each leaves 140%); an order
   // only ever spends up to 100 points of it, keeping the rest.
   const [referralPercentAvailable, setReferralPercentAvailable] = useState(0)
+  // Flat cash commission balance, paid out by admin later — not spendable on
+  // orders (see User::grantReferralCashCommission).
+  const [referralCommissionBalance, setReferralCommissionBalance] = useState(0)
+  // A kg credit, earned 3kg at a time whenever this account's referral
+  // network hits the monthly ambassador milestone — spent automatically on
+  // this account's own next gas order (see User::referral_free_kg_balance /
+  // OrderController::referralFreeKgDiscount), same as loyalty's discount.
+  const [referralFreeKgBalance, setReferralFreeKgBalance] = useState(0)
+  const [isBrandAmbassador, setIsBrandAmbassador] = useState(false)
+  // This calendar month's live standing toward that milestone (see
+  // User::referralMonthlyProgress) — shown as a progress bar.
+  const [referralMonthlyProgress, setReferralMonthlyProgress] = useState(null)
+  const [shareModalOpen, setShareModalOpen] = useState(false)
   const [customerId, setCustomerId] = useState(null)
   const [membershipTier, setMembershipTier] = useState('none')
   const [copied, setCopied] = useState(false)
@@ -46,37 +62,66 @@ function Profile({ token }) {
   const [message, setMessage] = useState('')
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => {
-    const fetchUser = async () => {
-      try {
-        const response = await apiFetch('/user', { token })
-        if (!response.ok) {
-          setError('Could not load your profile.')
-          return
-        }
+  // Set once the person types anywhere on the page, so a slow refresh that
+  // lands afterwards never overwrites what they're editing.
+  const editedRef = useRef(false)
+  const [offline, setOffline] = useState(false)
 
-        const data = await response.json()
-        const type = data.location_type || 'hostel'
-        setEmail(data.email || '')
-        setName(data.name || '')
-        setLocationType(type)
-        if (type === 'off_campus') setAddress(data.hostel || '')
-        else setHostel(data.hostel || '')
-        setPhone(data.phone || '')
-        setCylinderImageUrl(data.cylinder_image_url || null)
-        setReferralPercentAvailable(Number(data.referral_discount_percent_available || 0))
-        // Every account carries a customer_id from signup now, so it comes
-        // straight off /user — no separate subscription lookup needed.
-        setCustomerId(data.customer_id || null)
-        setMembershipTier(data.membership_tier || 'none')
-      } catch {
-        setError('Could not reach the server.')
-      } finally {
-        setLoading(false)
+  const applyUser = (data, { includeForm }) => {
+    if (includeForm) {
+      const type = data.location_type || 'hostel'
+      setEmail(data.email || '')
+      setName(data.name || '')
+      setLocationType(type)
+      if (type === 'off_campus') setAddress(data.hostel || '')
+      else setHostel(data.hostel || '')
+      setPhone(data.phone || '')
+    }
+    setCylinderImageUrl(data.cylinder_image_url || null)
+    setReferralPercentAvailable(Number(data.referral_discount_percent_available || 0))
+    setReferralCommissionBalance(Number(data.referral_commission_balance || 0))
+    setReferralFreeKgBalance(Number(data.referral_free_kg_balance || 0))
+    setIsBrandAmbassador(Boolean(data.is_brand_ambassador))
+    setReferralMonthlyProgress(data.referral_monthly_progress || null)
+    // Every account carries a customer_id from signup now, so it comes
+    // straight off /user — no separate subscription lookup needed.
+    setCustomerId(data.customer_id || null)
+    setMembershipTier(data.membership_tier || 'none')
+  }
+
+  const fetchUser = async () => {
+    try {
+      const response = await apiFetch('/user', { token })
+      if (!response.ok) {
+        setError('Could not load your profile.')
+        return
       }
+
+      const data = await response.json()
+      writeCachedData('user', token, data)
+      applyUser(data, { includeForm: !editedRef.current })
+      setOffline(false)
+      setError('')
+    } catch {
+      setOffline(true)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    // Show the last profile we saw straight away while fresh data loads.
+    const cached = readCachedData('user', token)
+    if (cached) {
+      /* eslint-disable react-hooks/set-state-in-effect -- one-shot seed from
+         the local cache on mount/token change, before the fetch below. */
+      applyUser(cached, { includeForm: true })
+      setLoading(false)
+      /* eslint-enable react-hooks/set-state-in-effect */
     }
 
     fetchUser()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token])
 
   const handleCopyCustomerId = async () => {
@@ -119,9 +164,10 @@ function Profile({ token }) {
       if (locationType === 'off_campus') setAddress(data.hostel ?? address)
       else setHostel(data.hostel ?? hostel)
       setPhone(data.phone ?? phone)
+      writeCachedData('user', token, { ...(readCachedData('user', token) || {}), ...data })
       setMessage('Profile updated successfully!')
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setSaving(false)
     }
@@ -136,9 +182,22 @@ function Profile({ token }) {
     )
   }
 
+  // Nothing cached and the network is down: don't render an empty (and
+  // saveable) form, just offer a retry.
+  if (offline && !email) {
+    return (
+      <div className="mx-auto max-w-3xl">
+        <PageHeader title="Profile" subtitle="Manage your account details." icon={UserCircle} />
+        <ConnectionError onRetry={fetchUser} />
+      </div>
+    )
+  }
+
   return (
-    <div className="mx-auto max-w-3xl">
+    <div className="mx-auto max-w-3xl" onInput={() => { editedRef.current = true }}>
       <PageHeader title="Profile" subtitle="Manage your account details." icon={UserCircle} />
+
+      {offline && <ConnectionError onRetry={fetchUser} />}
 
       {MEMBERSHIP_BADGES[membershipTier] && (() => {
         const badge = MEMBERSHIP_BADGES[membershipTier]
@@ -247,45 +306,99 @@ function Profile({ token }) {
               </p>
             ) : (
               <>
+                {isBrandAmbassador && (
+                  <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+                    <BadgeCheck className="mt-0.5 h-4 w-4 flex-shrink-0" strokeWidth={2} />
+                    <span>
+                      <span className="font-semibold">Official Brand Ambassador</span> — your ID card and executive
+                      gift package will be issued by the team.
+                    </span>
+                  </div>
+                )}
+
                 {customerId && (
                   <div className="mb-4">
                     <p className="text-sm text-slate-600 mb-2">
-                      Share your Customer ID with a new student. Once they register with it and either pay for a gas
-                      order of <strong>3&nbsp;kg or more</strong> or take a subscription — whichever happens first —
-                      you get a one-time discount off your next gas order, applied automatically at your checkout.
+                      Share your referral link with a new student. Once they register with it and pay for a gas
+                      order, you earn cash commission — and once enough of your referrals have filled gas with
+                      enough combined kg between them, you unlock free gas and Ambassador rewards too.
                     </p>
-                    <div className="flex items-center gap-2">
-                      <code className="input-field flex-1 font-mono text-sm bg-slate-50">{customerId}</code>
-                      {referralPercentAvailable > 0 && (
-                        <span className="whitespace-nowrap rounded-full bg-brand-teal/10 px-2.5 py-1 text-xs font-semibold text-brand-teal">
-                          {referralPercentAvailable}% available
-                        </span>
-                      )}
-                      <button
-                        type="button"
-                        onClick={handleCopyCustomerId}
-                        className="btn-outline whitespace-nowrap"
-                      >
-                        {copied ? (
-                          <span className="flex items-center gap-1.5"><Check className="h-4 w-4" strokeWidth={2} /> Copied</span>
-                        ) : (
-                          <span className="flex items-center gap-1.5"><Copy className="h-4 w-4" strokeWidth={1.8} /> Copy</span>
-                        )}
-                      </button>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                      <code className="input-field truncate font-mono text-sm bg-slate-50 sm:flex-1">{customerId}</code>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={handleCopyCustomerId}
+                          className="btn-outline flex-1 whitespace-nowrap sm:flex-none"
+                        >
+                          {copied ? (
+                            <span className="flex items-center justify-center gap-1.5"><Check className="h-4 w-4" strokeWidth={2} /> Copied</span>
+                          ) : (
+                            <span className="flex items-center justify-center gap-1.5"><Copy className="h-4 w-4" strokeWidth={1.8} /> Copy</span>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShareModalOpen(true)}
+                          className="btn-primary flex-1 whitespace-nowrap sm:flex-none"
+                        >
+                          <span className="flex items-center justify-center gap-1.5"><Share2 className="h-4 w-4" strokeWidth={1.8} /> Share & Earn</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )}
 
                 {referralPercentAvailable > 0 && (
-                  <p className="alert-success">
-                    You have <strong>{referralPercentAvailable}% referral discount</strong> available. Up to 100% is
-                    applied to your next gas order automatically at checkout — enough to make it fully free once you
-                    hit that mark; whatever isn&apos;t used stays on your account for later.
+                  <p className="alert-success mb-2">
+                    You have <strong>{referralPercentAvailable}% referral discount</strong> available (from before
+                    this program changed). Up to 100% is applied to your next gas order automatically at checkout;
+                    whatever isn&apos;t used stays on your account for later. It can also be applied to your
+                    first-ever subscription, as long as that plan is ₦15,000 or less.
                   </p>
+                )}
+
+                <div className="mb-2 flex items-start gap-2.5 rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-600">
+                  <Wallet className="mt-0.5 h-4 w-4 flex-shrink-0 text-brand-teal" strokeWidth={1.8} />
+                  <span>
+                    Cash commission earned so far: <strong>{formatNaira(referralCommissionBalance)}</strong>. Goes up
+                    every time someone you referred pays for a gas order — not spendable on orders, the team pays it
+                    out to you.
+                  </span>
+                </div>
+
+                {referralFreeKgBalance > 0 && (
+                  <p className="alert-success mb-2">
+                    You have <strong>{referralFreeKgBalance}kg</strong> of free gas credit from your referrals — it's
+                    applied automatically to your next gas order.
+                  </p>
+                )}
+
+                {referralMonthlyProgress && (
+                  <div className="rounded-xl border border-slate-200 p-3 text-sm text-slate-600">
+                    <div className="mb-1.5 flex items-center gap-1.5 font-semibold text-brand-navy">
+                      <Flame className="h-4 w-4 text-brand-teal" strokeWidth={1.8} />
+                      Progress toward your next free 3kg
+                    </div>
+                    <p>
+                      <strong>{referralMonthlyProgress.distinct_referred}</strong> / {referralMonthlyProgress.distinct_referred_target} friends
+                      referred have filled gas so far · <strong>{referralMonthlyProgress.total_kg}kg</strong> / {referralMonthlyProgress.total_kg_target}kg combined.
+                      Hit both and you get free 3kg plus, the first time, Ambassador status — any extra beyond
+                      the targets carries straight into the next round.
+                    </p>
+                  </div>
                 )}
               </>
             )}
           </div>
+        )}
+
+        {membershipTier !== 'vvip' && (
+          <ReferralShareModal
+            open={shareModalOpen}
+            onClose={() => setShareModalOpen(false)}
+            customerId={customerId}
+          />
         )}
       </div>
     </div>

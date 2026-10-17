@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { Check, Flame } from 'lucide-react'
-import { apiFetch, formatNaira } from '../../api'
+import { formatNaira } from '../../api'
+import { publicFetch, peekPublicData } from '../../publicData'
 import Reveal, { RevealItem } from '../motion/Reveal'
 
 const PACKAGE_TABS = [
@@ -38,8 +39,8 @@ function perksFor(plan) {
 // since that viewer may already be logged in).
 function SubscriptionPreview({ activePlanId = null, onSubscribe = null, disableSubscribe = false, submittingPlanId = null, defaultPackageType = 'session' }) {
   const [packageType, setPackageType] = useState(defaultPackageType)
-  const [plans, setPlans] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [plans, setPlans] = useState(() => peekPublicData('/subscription-plans') || [])
+  const [loading, setLoading] = useState(() => !peekPublicData('/subscription-plans'))
 
   // defaultPackageType often arrives async (MySubscription.jsx only knows
   // the viewer's own package type once their subscriber row has loaded) —
@@ -52,7 +53,7 @@ function SubscriptionPreview({ activePlanId = null, onSubscribe = null, disableS
   useEffect(() => {
     let cancelled = false
 
-    apiFetch('/subscription-plans')
+    publicFetch('/subscription-plans')
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => {
         if (!cancelled) setPlans(Array.isArray(data) ? data : [])

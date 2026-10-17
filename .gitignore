@@ -33,5 +33,6 @@ delpossibilities-gas-frontend/*.local
 # ===== OS / editor junk =====
 .DS_Store
 Thumbs.db
-.vscode/
 .idea/
+config.bat
+node_modules

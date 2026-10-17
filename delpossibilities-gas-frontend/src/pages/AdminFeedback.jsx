@@ -4,6 +4,8 @@ import { apiFetch, formatDate } from '../api'
 import PageHeader from '../components/PageHeader'
 import StatCard from '../components/StatCard'
 import EmptyState from '../components/EmptyState'
+import PaginationControls from '../components/PaginationControls'
+import { paginate } from '../pagination'
 
 const TYPE_LABELS = { suggestion: 'Suggestion', review: 'Review' }
 
@@ -54,6 +56,8 @@ function AdminFeedback({ token }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [filters, setFilters] = useState(EMPTY_FILTERS)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(15)
 
   useEffect(() => {
     apiFetch('/admin/feedback', { token })
@@ -63,9 +67,18 @@ function AdminFeedback({ token }) {
       .finally(() => setLoading(false))
   }, [token])
 
-  const set = (patch) => setFilters((prev) => ({ ...prev, ...patch }))
+  const set = (patch) => {
+    setFilters((prev) => ({ ...prev, ...patch }))
+    setPage(1)
+  }
 
   const filteredSubmissions = useMemo(() => filterSubmissions(submissions, filters), [submissions, filters])
+
+  const pageCount = Math.max(1, Math.ceil(filteredSubmissions.length / pageSize))
+  const visibleSubmissions = useMemo(
+    () => paginate(filteredSubmissions, Math.min(page, pageCount), pageSize),
+    [filteredSubmissions, page, pageCount, pageSize]
+  )
 
   const stats = useMemo(() => {
     const suggestions = submissions.filter((s) => s.type === 'suggestion').length
@@ -94,6 +107,7 @@ function AdminFeedback({ token }) {
       </div>
 
       {error && <p className="alert-error mb-6">{error}</p>}
+
 
       {loading && <div className="skeleton h-64 w-full" />}
 
@@ -140,7 +154,7 @@ function AdminFeedback({ token }) {
 
           {filteredSubmissions.length > 0 && (
             <div className="flex flex-col gap-3">
-              {filteredSubmissions.map((submission) => (
+              {visibleSubmissions.map((submission) => (
                 <div key={submission.id} className="card">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex items-center gap-2">
@@ -157,6 +171,17 @@ function AdminFeedback({ token }) {
                   </p>
                 </div>
               ))}
+
+              <PaginationControls
+                page={Math.min(page, pageCount)}
+                pageSize={pageSize}
+                total={filteredSubmissions.length}
+                onPageChange={(next) => setPage(Math.min(Math.max(1, next), pageCount))}
+                onPageSizeChange={(next) => {
+                  setPageSize(next)
+                  setPage(1)
+                }}
+              />
             </div>
           )}
         </>

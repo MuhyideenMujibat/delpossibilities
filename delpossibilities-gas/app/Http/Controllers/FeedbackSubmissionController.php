@@ -34,7 +34,7 @@ class FeedbackSubmissionController extends Controller
     // first, with the submitter attached where one was logged in.
     public function index(Request $request)
     {
-        $query = FeedbackSubmission::with('user')->latest();
+        $query = FeedbackSubmission::with('user.permissions')->latest();
 
         if ($request->filled('type')) {
             $query->where('type', $request->string('type'));

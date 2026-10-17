@@ -1,38 +1,42 @@
-import { useState, useEffect } from 'react'
+import { lazy, Suspense, useState, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { SESSION_DURATION_MS } from './api'
 import { peekPostAuthRedirect } from './authRedirect'
 import { UserProvider } from './components/UserProvider'
+import { PageSkeleton } from './components/Skeleton'
+import RouteErrorBoundary from './components/RouteErrorBoundary'
+import { clearCachedData } from './offlineCache'
 import Sidebar from './Sidebar'
 import DashboardTopbar from './DashboardTopbar'
 import StudentHeader from './components/shell/StudentHeader'
 import MobileTabBar from './components/shell/MobileTabBar'
-import Login from './pages/Login'
-import Register from './pages/Register'
-import ForgotPassword from './pages/ForgotPassword'
-import UploadCylinderImage from './pages/UploadCylinderImage'
-import Home from './pages/Home'
-import MyOrders from './pages/MyOrders'
-import OrderDetail from './pages/OrderDetail'
-import PaymentCallback from './pages/PaymentCallback'
-import MySubscription from './pages/MySubscription'
-import Cart from './pages/Cart'
-import Shop from './pages/Shop'
-import MyShopOrders from './pages/MyShopOrders'
-import AdminPayments from './pages/AdminPayments'
-import AdminReports from './pages/AdminReports'
-import AdminFeedback from './pages/AdminFeedback'
-import AdminStudentDetail from './pages/AdminStudentDetail'
-import AdminInvestments from './pages/AdminInvestments'
-import AdminOrdersHub from './pages/admin/AdminOrdersHub'
-import AdminSubscriptionsHub from './pages/admin/AdminSubscriptionsHub'
-import AdminPeopleHub from './pages/admin/AdminPeopleHub'
-import AdminConfigurationHub from './pages/admin/AdminConfigurationHub'
-import MyInvestments from './pages/MyInvestments'
-import Profile from './pages/Profile'
-import AdminProfile from './pages/AdminProfile'
-import Landing from './pages/Landing'
 import FeedbackWidget from './components/FeedbackWidget'
+const Login = lazy(() => import('./pages/Login'))
+const Register = lazy(() => import('./pages/Register'))
+const ForgotPassword = lazy(() => import('./pages/ForgotPassword'))
+const UploadCylinderImage = lazy(() => import('./pages/UploadCylinderImage'))
+const Home = lazy(() => import('./pages/Home'))
+const MyOrders = lazy(() => import('./pages/MyOrders'))
+const OrderDetail = lazy(() => import('./pages/OrderDetail'))
+const EditOrder = lazy(() => import('./pages/EditOrder'))
+const PaymentCallback = lazy(() => import('./pages/PaymentCallback'))
+const MySubscription = lazy(() => import('./pages/MySubscription'))
+const Cart = lazy(() => import('./pages/Cart'))
+const Shop = lazy(() => import('./pages/Shop'))
+const MyShopOrders = lazy(() => import('./pages/MyShopOrders'))
+const AdminPayments = lazy(() => import('./pages/AdminPayments'))
+const AdminReports = lazy(() => import('./pages/AdminReports'))
+const AdminFeedback = lazy(() => import('./pages/AdminFeedback'))
+const AdminStudentDetail = lazy(() => import('./pages/AdminStudentDetail'))
+const AdminInvestments = lazy(() => import('./pages/AdminInvestments'))
+const AdminOrdersHub = lazy(() => import('./pages/admin/AdminOrdersHub'))
+const AdminSubscriptionsHub = lazy(() => import('./pages/admin/AdminSubscriptionsHub'))
+const AdminPeopleHub = lazy(() => import('./pages/admin/AdminPeopleHub'))
+const AdminConfigurationHub = lazy(() => import('./pages/admin/AdminConfigurationHub'))
+const MyInvestments = lazy(() => import('./pages/MyInvestments'))
+const Profile = lazy(() => import('./pages/Profile'))
+const AdminProfile = lazy(() => import('./pages/AdminProfile'))
+const Landing = lazy(() => import('./pages/Landing'))
 
 function readPermissions() {
   try {
@@ -82,6 +86,7 @@ function App() {
     localStorage.removeItem('role')
     localStorage.removeItem('permissions')
     localStorage.removeItem('loginAt')
+    clearCachedData()
     setToken(null)
     setRole(null)
     setPermissionsState([])
@@ -186,7 +191,11 @@ function AppShell({
   if (location.pathname === '/') {
     return (
       <>
-        <Landing token={token} isAdmin={isAdmin} />
+        <RouteErrorBoundary>
+          <Suspense fallback={<PageSkeleton />}>
+            <Landing token={token} isAdmin={isAdmin} />
+          </Suspense>
+        </RouteErrorBoundary>
         {!isAdmin && <FeedbackWidget token={token} />}
       </>
     )
@@ -203,6 +212,8 @@ function AppShell({
           <div className="flex min-w-0 flex-1 flex-col">
             <DashboardTopbar token={token} role={role} onLogout={handleLogout} />
             <main className="flex-1 p-4 sm:p-6 md:p-10">
+              <RouteErrorBoundary>
+                <Suspense fallback={<PageSkeleton />}>
               <Routes>
                 {/* Consolidated hubs — each fuses several former sidebar
                     entries into one tabbed page. Every original admin page
@@ -250,6 +261,8 @@ function AppShell({
 
                 <Route path="*" element={<Navigate to={adminHome} />} />
               </Routes>
+                </Suspense>
+              </RouteErrorBoundary>
             </main>
           </div>
         </div>
@@ -260,6 +273,8 @@ function AppShell({
         <div className="flex min-h-screen flex-col bg-brand-bg">
           <StudentHeader token={token} role={role} onLogout={handleLogout} />
           <main className="flex-1 p-4 pb-24 sm:p-6 md:p-10 md:pb-10">
+            <RouteErrorBoundary>
+              <Suspense fallback={<PageSkeleton />}>
             <Routes>
               <Route path="/home" element={<Home token={token} />} />
               <Route path="/shop" element={<Shop token={token} />} />
@@ -288,6 +303,7 @@ function AppShell({
               <Route path="/upload-cylinder-image" element={!token ? <Navigate to="/login" /> : <UploadCylinderImage token={token} />} />
               <Route path="/orders" element={!token ? <Navigate to="/login" /> : <MyOrders token={token} />} />
               <Route path="/orders/:id" element={!token ? <Navigate to="/login" /> : <OrderDetail token={token} />} />
+              <Route path="/orders/:id/edit" element={!token ? <Navigate to="/login" /> : <EditOrder token={token} />} />
               <Route path="/payment/callback" element={!token ? <Navigate to="/login" /> : <PaymentCallback token={token} />} />
               <Route path="/subscriptions" element={<Navigate to="/subscription" replace />} />
               <Route path="/subscription" element={<MySubscription token={token} />} />
@@ -297,6 +313,8 @@ function AppShell({
               <Route path="/profile" element={!token ? <Navigate to="/login" /> : <Profile token={token} />} />
               <Route path="*" element={<Navigate to="/home" />} />
             </Routes>
+              </Suspense>
+            </RouteErrorBoundary>
           </main>
           <MobileTabBar />
         </div>

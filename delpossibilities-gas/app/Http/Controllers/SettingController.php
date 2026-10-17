@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Mail\BroadcastOfferMail;
 use App\Models\Setting;
 use App\Models\User;
 use Illuminate\Http\Request;
@@ -11,7 +12,7 @@ class SettingController extends Controller
 {
     public function showPrice()
     {
-        return response()->json(Setting::current());
+        return response()->json(Setting::cachedPricePayload());
     }
 
     // Public: tells the frontend which gateway(s) are currently available so
@@ -21,12 +22,7 @@ class SettingController extends Controller
     // OrderController::pay / SubscriberController::pay).
     public function paymentGateways()
     {
-        $setting = Setting::current();
-
-        return response()->json([
-            'paystack_enabled' => (bool) $setting->paystack_enabled,
-            'flutterwave_enabled' => (bool) $setting->flutterwave_enabled,
-        ]);
+        return response()->json(Setting::cachedGatewayPayload());
     }
 
     public function updatePrice(Request $request)
@@ -49,6 +45,9 @@ class SettingController extends Controller
             'loyalty_threshold_kg' => ['nullable', 'numeric', 'min:0.01'],
             'loyalty_discount_percent' => ['nullable', 'numeric', 'min:0.01', 'max:100'],
             'referral_discount_percent' => ['nullable', 'numeric', 'min:0.01', 'max:100'],
+            'referral_commission_amount' => ['nullable', 'numeric', 'min:0'],
+            'referral_milestone_referred_count' => ['nullable', 'integer', 'min:1'],
+            'referral_milestone_kg' => ['nullable', 'numeric', 'min:0.01'],
             'session_starts_at' => ['nullable', 'date'],
             'session_ends_at' => ['nullable', 'date'],
             'semester_starts_at' => ['nullable', 'date'],
@@ -84,6 +83,9 @@ class SettingController extends Controller
             'loyalty_threshold_kg' => $validated['loyalty_threshold_kg'] ?? null,
             'loyalty_discount_percent' => $validated['loyalty_discount_percent'] ?? null,
             'referral_discount_percent' => $validated['referral_discount_percent'] ?? null,
+            'referral_commission_amount' => $validated['referral_commission_amount'] ?? null,
+            'referral_milestone_referred_count' => $validated['referral_milestone_referred_count'] ?? null,
+            'referral_milestone_kg' => $validated['referral_milestone_kg'] ?? null,
             'session_starts_at' => $validated['session_starts_at'] ?? null,
             'session_ends_at' => $validated['session_ends_at'] ?? null,
             'semester_starts_at' => $validated['semester_starts_at'] ?? null,
@@ -111,14 +113,18 @@ class SettingController extends Controller
 
         $users = User::where('role', 'student')->whereNotNull('email')->get();
 
+        // Queued, one per recipient — this used to send synchronously in a
+        // loop, meaning the admin's request blocked on however many hundred
+        // SMTP round-trips a full broadcast took, with no record of who'd
+        // been sent to if it died partway through. Queueing hands each send
+        // to a worker independently, so one slow/failed send doesn't hold
+        // up (or lose track of) the rest.
         foreach ($users as $user) {
-            Mail::raw($validated['message'], function ($mail) use ($user, $validated) {
-                $mail->to($user->email)->subject($validated['subject']);
-            });
+            Mail::to($user->email)->queue(new BroadcastOfferMail($validated['subject'], $validated['message']));
         }
 
         return response()->json([
-            'message' => 'Broadcast sent.',
+            'message' => 'Broadcast queued.',
             'recipients' => $users->count(),
         ]);
     }

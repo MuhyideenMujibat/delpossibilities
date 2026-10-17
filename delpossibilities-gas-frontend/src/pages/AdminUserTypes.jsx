@@ -34,7 +34,7 @@ function AdminUserTypes({ token }) {
       setPermissions(await permsRes.json())
       setError('')
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setLoading(false)
     }
@@ -90,7 +90,7 @@ function AdminUserTypes({ token }) {
       await fetchAll()
       cancelEdit()
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setSaving(false)
     }
@@ -112,7 +112,7 @@ function AdminUserTypes({ token }) {
       setDeleteTarget(null)
       if (editingId === deleteTarget.id) cancelEdit()
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setDeleting(false)
     }
@@ -177,6 +177,7 @@ function AdminUserTypes({ token }) {
           {error && <p className="alert-error">{error}</p>}
         </form>
       </div>
+
 
       {loading && <div className="skeleton h-40 w-full" />}
 

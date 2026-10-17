@@ -54,6 +54,9 @@ function AdminSettings({ token }) {
   const [loyaltyThresholdKg, setLoyaltyThresholdKg] = useState('')
   const [loyaltyDiscountPercent, setLoyaltyDiscountPercent] = useState('')
   const [referralDiscountPercent, setReferralDiscountPercent] = useState('')
+  const [referralCommissionAmount, setReferralCommissionAmount] = useState('')
+  const [referralMilestoneReferredCount, setReferralMilestoneReferredCount] = useState('')
+  const [referralMilestoneKg, setReferralMilestoneKg] = useState('')
   const [sessionStartsAt, setSessionStartsAt] = useState('')
   const [sessionEndsAt, setSessionEndsAt] = useState('')
   const [semesterStartsAt, setSemesterStartsAt] = useState('')
@@ -103,6 +106,9 @@ function AdminSettings({ token }) {
         setLoyaltyThresholdKg(data.loyalty_threshold_kg || '')
         setLoyaltyDiscountPercent(data.loyalty_discount_percent || '')
         setReferralDiscountPercent(data.referral_discount_percent || '')
+        setReferralCommissionAmount(data.referral_commission_amount || '')
+        setReferralMilestoneReferredCount(data.referral_milestone_referred_count || '')
+        setReferralMilestoneKg(data.referral_milestone_kg || '')
         setSessionStartsAt(toDateInputValue(data.session_starts_at))
         setSessionEndsAt(toDateInputValue(data.session_ends_at))
         setSemesterStartsAt(toDateInputValue(data.semester_starts_at))
@@ -115,7 +121,7 @@ function AdminSettings({ token }) {
         setInvestmentTenuresMonths((data.investment_tenures_months || []).join(', '))
         setInvestmentWhatsappNumber(data.investment_whatsapp_number || '')
       } catch {
-        setError('Could not reach the server.')
+        setError('Check your internet connection.')
       }
     }
 
@@ -166,6 +172,9 @@ function AdminSettings({ token }) {
           loyalty_threshold_kg: loyaltyThresholdKg || null,
           loyalty_discount_percent: loyaltyDiscountPercent || null,
           referral_discount_percent: referralDiscountPercent || null,
+          referral_commission_amount: referralCommissionAmount || null,
+          referral_milestone_referred_count: referralMilestoneReferredCount || null,
+          referral_milestone_kg: referralMilestoneKg || null,
           session_starts_at: sessionStartsAt || null,
           session_ends_at: sessionEndsAt || null,
           semester_starts_at: semesterStartsAt || null,
@@ -208,6 +217,9 @@ function AdminSettings({ token }) {
       setLoyaltyThresholdKg(data.loyalty_threshold_kg || '')
       setLoyaltyDiscountPercent(data.loyalty_discount_percent || '')
       setReferralDiscountPercent(data.referral_discount_percent || '')
+      setReferralCommissionAmount(data.referral_commission_amount || '')
+      setReferralMilestoneReferredCount(data.referral_milestone_referred_count || '')
+      setReferralMilestoneKg(data.referral_milestone_kg || '')
       setSessionStartsAt(toDateInputValue(data.session_starts_at))
       setSessionEndsAt(toDateInputValue(data.session_ends_at))
       setSemesterStartsAt(toDateInputValue(data.semester_starts_at))
@@ -221,7 +233,7 @@ function AdminSettings({ token }) {
       setInvestmentWhatsappNumber(data.investment_whatsapp_number || '')
       setMessage('Settings updated successfully.')
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setSaving(false)
     }
@@ -247,9 +259,9 @@ function AdminSettings({ token }) {
         return
       }
 
-      setBroadcastMessage(`Broadcast sent to ${data.recipients || 0} student${data.recipients === 1 ? '' : 's'}.`)
+      setBroadcastMessage(`Broadcast queued for ${data.recipients || 0} student${data.recipients === 1 ? '' : 's'} — sending in the background.`)
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setBroadcasting(false)
     }
@@ -608,20 +620,69 @@ function AdminSettings({ token }) {
           <div className="rounded-xl border border-slate-200 p-4">
             <span className="flex items-center gap-2 text-sm font-semibold text-brand-navy">
               <Gift className="h-4 w-4 text-brand-teal" strokeWidth={2} />
-              Referral Rewards
+              Referral Rewards — Cash Commission & Ambassador Program
             </span>
             <span className="block text-sm text-slate-500">
-              When a new student registers with someone&apos;s Customer ID and that student then either pays for
-              a gas order of <strong>3&nbsp;kg or more</strong> or takes a subscription — whichever happens
-              first — the <strong>referrer</strong> gets one coupon worth the discount below, once per referred
-              student. Coupons stack: a referrer with several can spend them all on one gas order, up to making
-              it fully free, and any left over stay on their account for a future order. The student who used
-              the code gets no discount themselves. Applied automatically at checkout.
+              When a new student registers with someone&apos;s referral link and then pays for a gas order, the
+              <strong> referrer</strong> earns the flat cash amount below per order — it accrues on their account
+              and is paid out to them later, it&apos;s not usable as a discount. Separately, the referrer's
+              friends-referred and combined-kg counts run continuously (not reset by the calendar) — the moment
+              both hit the targets below, 3kg of free gas is credited automatically toward their next order,
+              anything beyond the targets carries into the next round, and the first time it happens they're
+              made an official Brand Ambassador.
             </span>
 
-            <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
               <div>
-                <label className="label-text" htmlFor="referral-discount">Referrer's discount (%)</label>
+                <label className="label-text" htmlFor="referral-commission">Cash commission per order (₦)</label>
+                <input
+                  id="referral-commission"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="e.g. 50"
+                  value={referralCommissionAmount}
+                  onChange={(e) => setReferralCommissionAmount(e.target.value)}
+                  className="input-field"
+                />
+              </div>
+
+              <div>
+                <label className="label-text" htmlFor="referral-milestone-count">Friends needed per cycle</label>
+                <input
+                  id="referral-milestone-count"
+                  type="number"
+                  min="1"
+                  step="1"
+                  placeholder="e.g. 10"
+                  value={referralMilestoneReferredCount}
+                  onChange={(e) => setReferralMilestoneReferredCount(e.target.value)}
+                  className="input-field"
+                />
+              </div>
+
+              <div>
+                <label className="label-text" htmlFor="referral-milestone-kg">Combined kg needed per cycle</label>
+                <input
+                  id="referral-milestone-kg"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  placeholder="e.g. 30"
+                  value={referralMilestoneKg}
+                  onChange={(e) => setReferralMilestoneKg(e.target.value)}
+                  className="input-field"
+                />
+              </div>
+            </div>
+
+            <div className="mt-4 border-t border-slate-100 pt-4">
+              <label className="label-text" htmlFor="referral-discount">Legacy referrer discount (%)</label>
+              <span className="block text-sm text-slate-500">
+                No longer granted to new referrals — kept only so students who already earned this percent
+                balance before the program changed can still spend it on their own orders.
+              </span>
+              <div className="mt-2 max-w-xs">
                 <input
                   id="referral-discount"
                   type="number"

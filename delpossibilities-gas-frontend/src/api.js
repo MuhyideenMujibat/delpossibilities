@@ -16,6 +16,40 @@ export function resolveImageUrl(url) {
   return url.startsWith('/') ? `${SERVER_BASE}${url}` : url
 }
 
+// Weak-network handling for GETs: when the connection itself drops (fetch
+// rejects) retry up to twice with a short delay. Deliberately NO timeout and
+// NO retry on slow or erroring responses — a slow server is not a lost
+// connection, and cancelling/re-sending its requests only piles more work on
+// it (and used to surface a false "check your internet connection").
+const GET_RETRY_DELAYS_MS = [600, 1500]
+
+export const NETWORK_ERROR_MESSAGE = 'Check your internet connection.'
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+async function fetchWithRetry(url, init) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await fetch(url, init)
+    } catch (error) {
+      if (attempt >= GET_RETRY_DELAYS_MS.length) throw error
+    }
+
+    await sleep(GET_RETRY_DELAYS_MS[attempt])
+  }
+}
+
+// Admin screens (Dashboard, Payments, Reports, hubs/tabs) each download the same
+// big lists (/orders, /admin/...). Identical admin GETs made within a few
+// seconds — including two at the same moment — share one request instead of
+// repeating it. Any non-GET request clears the whole thing, so an admin's own
+// change is never hidden behind it, and failures are never kept. Student and
+// payment endpoints are not included: they always go to the server.
+const SHARED_GET_TTL_MS = 15 * 1000
+const sharedGets = new Map()
+
+const isSharedGetPath = (path) => path.startsWith('/admin/') || path === '/orders' || path.startsWith('/settings/')
+
 // Wraps fetch for API calls. Always sends Accept: application/json so Laravel
 // returns JSON error responses instead of redirecting (its default behavior
 // for requests that don't explicitly ask for JSON).
@@ -37,11 +71,41 @@ export function apiFetch(path, { method = 'GET', token, body, headers = {} } = {
     finalBody = JSON.stringify(body)
   }
 
-  return fetch(`${API_BASE}${path}`, {
-    method,
-    headers: finalHeaders,
-    body: finalBody,
-  }).then((response) => {
+  const request = { method, headers: finalHeaders, body: finalBody }
+  const url = `${API_BASE}${path}`
+
+  // Only GETs are retried / time out. A POST/PATCH/DELETE (an order, a
+  // payment, an admin action) must never be silently re-sent — if the first
+  // attempt reached the server but the reply was lost, a retry would run it
+  // twice — so those go through exactly once, as before.
+  const isGet = method.toUpperCase() === 'GET'
+  if (!isGet) sharedGets.clear()
+
+  const shareKey = isGet && token && isSharedGetPath(path) ? `${token.slice(-10)} ${path}` : null
+  const shared = shareKey ? sharedGets.get(shareKey) : null
+
+  let send
+  if (shared && Date.now() - shared.at < SHARED_GET_TTL_MS) {
+    // Each caller gets its own copy, since a response body can be read once.
+    send = shared.promise.then((response) => response.clone())
+  } else {
+    send = isGet ? fetchWithRetry(url, request) : fetch(url, request)
+
+    if (shareKey) {
+      const promise = send.then((response) => response.clone())
+      const entry = { at: Date.now(), promise }
+      sharedGets.set(shareKey, entry)
+      promise
+        .then((response) => {
+          if (!response.ok && sharedGets.get(shareKey) === entry) sharedGets.delete(shareKey)
+        })
+        .catch(() => {
+          if (sharedGets.get(shareKey) === entry) sharedGets.delete(shareKey)
+        })
+    }
+  }
+
+  return send.then((response) => {
     // A 401 on a request that carried a token means the session (e.g. the
     // 60-day Sanctum token expiry) is no longer valid — tell the app to log
     // out. Requests without a token (login, forgot-password) 401ing is just
@@ -126,6 +190,15 @@ export function whatsappUrl(phone, message = '') {
   const normalized = digits.startsWith('0') ? `234${digits.slice(1)}` : digits
   const text = message ? `?text=${encodeURIComponent(message)}` : ''
   return `https://wa.me/${normalized}${text}`
+}
+
+// No phone number, unlike whatsappUrl above — this opens WhatsApp's own
+// share sheet so the user picks where the message goes themselves (a
+// contact, a group, or their own Status). Used by the referral Share & Earn
+// flow (see ReferralShareModal.jsx); there's no public API to post to
+// WhatsApp Status directly, so this is the honest equivalent.
+export function whatsappShareUrl(message) {
+  return `https://wa.me/?text=${encodeURIComponent(message)}`
 }
 
 // Applies the shared search/status/date-range filter set used by the student

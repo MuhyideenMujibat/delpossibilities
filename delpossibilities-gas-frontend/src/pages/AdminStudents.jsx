@@ -42,7 +42,7 @@ function AdminStudents({ token }) {
       setStudents(Array.isArray(data) ? data : data.data || [])
       setError('')
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setLoading(false)
     }
@@ -83,7 +83,7 @@ function AdminStudents({ token }) {
       setStudents((prev) => prev.filter((s) => s.id !== deleteTarget.id))
       setDeleteTarget(null)
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setDeleting(false)
     }
@@ -108,6 +108,7 @@ function AdminStudents({ token }) {
       </div>
 
       {error && <p className="alert-error mb-6">{error}</p>}
+
 
       {loading && <div className="skeleton h-64 w-full" />}
 

@@ -5,7 +5,9 @@ namespace App\Http\Controllers;
 use App\Models\Subscriber;
 use App\Models\SubscriptionPayment;
 use App\Models\SubscriptionPlan;
+use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -14,6 +16,31 @@ use Illuminate\Validation\ValidationException;
 
 class SubscriberController extends Controller
 {
+    // A referral discount on a subscription is deliberately narrower than
+    // on a gas order: only the referrer's very first subscription ever,
+    // and only when the plan itself isn't already expensive — keeps a
+    // referral balance from wiping out a premium multi-month plan.
+    private const REFERRAL_DISCOUNT_MAX_SUBSCRIPTION_PRICE = 15000.0;
+
+    // True only the first time this user ever subscribes (no subscriber
+    // row at all, ignoring the one being edited right now, if any — see
+    // the repoint path in store(), which calls this on a row that already
+    // exists) and only under the plan price cap above.
+    private function referralDiscountEligibleForSubscription(User $user, float $planPrice, ?int $excludingSubscriberId = null): bool
+    {
+        if ($planPrice > self::REFERRAL_DISCOUNT_MAX_SUBSCRIPTION_PRICE) {
+            return false;
+        }
+
+        // A cancelled row never delivered anything (its referral percent was
+        // refunded on cancel), so it must not use up the "first ever" slot.
+        $query = $user->subscribers()->where('status', '!=', 'cancelled');
+        if ($excludingSubscriberId) {
+            $query->where('id', '!=', $excludingSubscriberId);
+        }
+
+        return ! $query->exists();
+    }
     public function store(Request $request)
     {
         $validated = $request->validate([
@@ -55,35 +82,80 @@ class SubscriberController extends Controller
 
         if ($pendingExisting) {
             $pendingExisting->payments()->whereNull('paid_at')->delete();
-            $pendingExisting->update([
-                'subscription_plan_id' => $plan->id,
-                'locked_price' => $plan->price,
-            ]);
+
+            // Repointing to a different plan means a different price, so any
+            // referral percent this row already spent needs refunding before
+            // it's recomputed against the new one — same reasoning as
+            // OrderController::update refunding before it recomputes.
+            $pendingExisting = DB::transaction(function () use ($pendingExisting, $plan, $user) {
+                if ((float) $pendingExisting->referral_percent_used > 0) {
+                    $user->increment('referral_discount_percent_available', (float) $pendingExisting->referral_percent_used);
+                }
+
+                $eligible = $this->referralDiscountEligibleForSubscription($user->fresh(), (float) $plan->price, $pendingExisting->id);
+                [$referralDiscountAmount, $referralPercentUsed] = $eligible
+                    ? $user->fresh()->previewReferralDiscount((float) $plan->price)
+                    : [0.0, 0.0];
+
+                $pendingExisting->update([
+                    'subscription_plan_id' => $plan->id,
+                    'locked_price' => $plan->price,
+                    'referral_discount_amount' => $referralDiscountAmount,
+                    'referral_percent_used' => $referralPercentUsed,
+                    'total_amount' => round((float) $plan->price - $referralDiscountAmount, 2),
+                ]);
+
+                if ($referralPercentUsed > 0) {
+                    $user->decrement('referral_discount_percent_available', $referralPercentUsed);
+                }
+
+                return $pendingExisting;
+            });
 
             return response()->json($pendingExisting->fresh()->load('plan'), 200);
         }
 
-        $subscriber = $user->subscribers()->create([
-            // A subscriber row's customer_id always mirrors whoever
-            // currently owns it — this account's own permanent code, set
-            // once at signup (see User::customerIdFor) and never changed by
-            // subscribing, resubscribing, or receiving a transfer. It only
-            // moves when THIS account gives a subscription away (see
-            // transfer(), which repoints it to the recipient's own code).
-            // subscribers.customer_id has no uniqueness constraint (see
-            // migration 2026_09_01_190000) precisely because the same code
-            // legitimately reappears on every one of an account's own rows
-            // across subscription cycles. generateCustomerId() is only a
-            // defensive fallback for the practically-impossible case of a
-            // blank account-level code.
-            'customer_id' => $user->customer_id ?: Subscriber::generateCustomerId(),
-            'subscription_plan_id' => $plan->id,
-            'locked_price' => $plan->price,
-            'status' => 'pending',
-            'recipient_name' => $user->name,
-            'recipient_phone' => $user->phone,
-            'recipient_address' => $user->hostel,
-        ]);
+        // Same referral-percent-balance pattern as OrderController::store —
+        // a subscription can be paid for with it too now, not just a gas
+        // order — but only the referrer's first-ever subscription, and only
+        // under the price cap (see referralDiscountEligibleForSubscription).
+        $eligible = $this->referralDiscountEligibleForSubscription($user, (float) $plan->price);
+        [$referralDiscountAmount, $referralPercentUsed] = $eligible
+            ? $user->previewReferralDiscount((float) $plan->price)
+            : [0.0, 0.0];
+
+        $subscriber = DB::transaction(function () use ($user, $plan, $referralDiscountAmount, $referralPercentUsed) {
+            $subscriber = $user->subscribers()->create([
+                // A subscriber row's customer_id always mirrors whoever
+                // currently owns it — this account's own permanent code, set
+                // once at signup (see User::customerIdFor) and never changed by
+                // subscribing, resubscribing, or receiving a transfer. It only
+                // moves when THIS account gives a subscription away (see
+                // transfer(), which repoints it to the recipient's own code).
+                // subscribers.customer_id has no uniqueness constraint (see
+                // migration 2026_09_01_190000) precisely because the same code
+                // legitimately reappears on every one of an account's own rows
+                // across subscription cycles. generateCustomerId() is only a
+                // defensive fallback for the practically-impossible case of a
+                // blank account-level code.
+                'customer_id' => $user->customer_id ?: Subscriber::generateCustomerId(),
+                'subscription_plan_id' => $plan->id,
+                'locked_price' => $plan->price,
+                'referral_discount_amount' => $referralDiscountAmount,
+                'referral_percent_used' => $referralPercentUsed,
+                'total_amount' => round((float) $plan->price - $referralDiscountAmount, 2),
+                'status' => 'pending',
+                'recipient_name' => $user->name,
+                'recipient_phone' => $user->phone,
+                'recipient_address' => $user->hostel,
+            ]);
+
+            if ($referralPercentUsed > 0) {
+                $user->decrement('referral_discount_percent_available', $referralPercentUsed);
+            }
+
+            return $subscriber;
+        });
 
         return response()->json($subscriber->load('plan'), 201);
     }
@@ -177,10 +249,12 @@ class SubscriberController extends Controller
         $reference = 'subscription_'.$subscriber->id.'_'.Str::random(10);
 
         try {
-            $response = Http::withToken(config('services.paystack.secret_key'))
+            $response = Http::withToken(config('services.paystack.secret_key'))->timeout(10)
                 ->post('https://api.paystack.co/transaction/initialize', [
                     'email' => $user->email,
-                    'amount' => (int) ($subscriber->locked_price * 100),
+                    // total_amount, not locked_price — the actual charge
+                    // after any referral discount (see store()).
+                    'amount' => (int) ($subscriber->total_amount * 100),
                     'reference' => $reference,
                     'callback_url' => config('services.paystack.callback_url'),
                 ]);
@@ -206,7 +280,7 @@ class SubscriberController extends Controller
         $authorizationUrl = $response->json('data.authorization_url');
 
         $subscriber->payments()->create([
-            'amount' => $subscriber->locked_price,
+            'amount' => $subscriber->total_amount,
             'paystack_reference' => $reference,
             'payment_authorization_url' => $authorizationUrl,
             'method' => 'paystack',
@@ -242,7 +316,7 @@ class SubscriberController extends Controller
         }
 
         try {
-            $response = Http::withToken(config('services.paystack.secret_key'))
+            $response = Http::withToken(config('services.paystack.secret_key'))->timeout(10)
                 ->get('https://api.paystack.co/transaction/verify/'.$payment->paystack_reference);
         } catch (\Illuminate\Http\Client\ConnectionException $e) {
             Log::error('Paystack verify connection error: '.$e->getMessage());
@@ -270,9 +344,18 @@ class SubscriberController extends Controller
         $activationMessage = null;
 
         if ($paystackStatus === 'success' && $amountPaidInKobo === $expectedAmountInKobo) {
-            $subscriber->load('plan');
             try {
-                $subscriber->activate($payment);
+                // Locked and re-checked inside a transaction — this call can
+                // race the Paystack webhook activating the same subscriber
+                // (see PaystackWebhookController::handleSubscriptionPayment).
+                DB::transaction(function () use ($subscriber, $payment) {
+                    $locked = Subscriber::whereKey($subscriber->id)->lockForUpdate()->first();
+                    $locked->load('plan');
+
+                    if ($locked->status === 'pending') {
+                        $locked->activate($payment);
+                    }
+                });
             } catch (\RuntimeException $e) {
                 $activationMessage = 'Your payment was received, but subscriptions are not open yet — please check back shortly.';
             }
@@ -414,10 +497,80 @@ class SubscriberController extends Controller
         return response()->json($subscriber->fresh(['plan', 'user']));
     }
 
+    // Admin: cancels a subscription that either hasn't been paid for yet
+    // (status 'pending' — the student abandoned checkout) or was granted
+    // manually by an admin (see AdminSubscriberController::store — a
+    // sponsored slot, goodwill gesture, etc., flagged by carrying a
+    // SubscriptionPayment with method 'manual'). A genuinely paid, active
+    // subscription can't be cancelled this way — that's real money a
+    // refund process outside this app would need to handle first.
+    public function cancel(Request $request, Subscriber $subscriber)
+    {
+        if ($subscriber->status === 'cancelled') {
+            return response()->json($subscriber->load(['user', 'plan', 'payments']));
+        }
+
+        $wasManuallyCreated = $subscriber->payments()->where('method', 'manual')->exists();
+
+        if ($subscriber->status !== 'pending' && ! $wasManuallyCreated) {
+            throw ValidationException::withMessages([
+                'status' => ['Only a subscription still awaiting payment, or one added manually by an admin, can be cancelled this way.'],
+            ]);
+        }
+
+        DB::transaction(function () use ($subscriber) {
+            // Refunds whatever referral-percent balance this subscription
+            // spent at store() time — a pending row that's abandoned should
+            // give that back, same reasoning as OrderController::update
+            // refunding before it recomputes. A manually-created one never
+            // spent any (see AdminSubscriberController::store), so this is a
+            // no-op for that case.
+            if ((float) $subscriber->referral_percent_used > 0) {
+                $subscriber->user->increment('referral_discount_percent_available', (float) $subscriber->referral_percent_used);
+            }
+
+            // Clears out any abandoned, never-paid payment attempt rows —
+            // the real (paid) manual payment, if any, is untouched since it
+            // has a paid_at.
+            $subscriber->payments()->whereNull('paid_at')->delete();
+
+            // A voided subscription can't be delivered against, so any
+            // refill still waiting on the admin (pending, or approved but not
+            // yet picked up) is cancelled with it — otherwise it would sit in
+            // the admin Refills queue and could still be delivered. A refill
+            // already 'picked_up' is physically on its way and is left alone.
+            // Carts riding on those refills are detached the same way
+            // RefillController::update does on a manual refill cancel.
+            $subscriber->refills()
+                ->whereIn('status', ['pending', 'approved'])
+                ->with(['productOrder', 'attachedProductOrder'])
+                ->get()
+                ->each(function ($refill) {
+                    foreach ([['product_order_id', $refill->productOrder], ['attached_product_order_id', $refill->attachedProductOrder]] as [$column, $cart]) {
+                        if (! $cart) {
+                            continue;
+                        }
+                        if ($cart->status !== 'pending') {
+                            $cart->update(['status' => 'approved']);
+                        }
+                        $refill->update([$column => null]);
+                    }
+                    $refill->update(['status' => 'cancelled']);
+                });
+
+            $subscriber->update(['status' => 'cancelled']);
+        });
+
+        return response()->json($subscriber->fresh()->load(['user', 'plan', 'payments']));
+    }
+
     // Admin: searchable/filterable subscriber list.
     public function index(Request $request)
     {
-        $query = Subscriber::with(['user', 'plan']);
+        // 'payments' is loaded so the admin UI can tell a manually-created
+        // subscription apart from a genuinely paid one (see cancel() below) —
+        // a manual one carries a SubscriptionPayment with method 'manual'.
+        $query = Subscriber::with(['user.permissions', 'plan', 'payments']);
 
         if ($request->filled('package_type')) {
             $query->whereHas('plan', fn ($q) => $q->where('package_type', $request->string('package_type')));
@@ -456,7 +609,13 @@ class SubscriberController extends Controller
             ->groupBy(fn ($subscriber) => $subscriber->plan->tier)
             ->map->count();
 
+        // Excludes a cancelled subscriber's payments (see
+        // SubscriberController::cancel) — once a subscription is voided,
+        // whatever it was recorded as having "paid" (including a manual
+        // grant's own payment row, which carries a paid_at too) shouldn't
+        // keep inflating this total.
         $revenueByPackage = SubscriptionPayment::whereNotNull('paid_at')
+            ->whereHas('subscriber', fn ($q) => $q->where('status', '!=', 'cancelled'))
             ->with('subscriber.plan')
             ->get()
             ->groupBy(fn ($payment) => $payment->subscriber->plan->package_type)
@@ -464,7 +623,7 @@ class SubscriberController extends Controller
 
         $expiringSoon = Subscriber::where('status', 'active')
             ->whereBetween('ends_at', [now(), now()->addDays(30)])
-            ->with(['user', 'plan'])
+            ->with(['user.permissions', 'plan'])
             ->orderBy('ends_at')
             ->get();
 

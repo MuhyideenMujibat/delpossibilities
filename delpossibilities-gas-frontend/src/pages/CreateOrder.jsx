@@ -2,8 +2,10 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { PlusCircle, MapPin, Flame, Check, ImagePlus, Camera, ArrowLeft, ArrowRight, ShieldCheck, ShoppingBag, ShoppingCart, Gift } from 'lucide-react'
 import { apiFetch, formatNaira, resolveImageUrl } from '../api'
+import { publicFetch } from '../publicData'
 import { setPostAuthRedirect } from '../authRedirect'
 import { setPendingOrderImage, takePendingOrderImage } from '../pendingOrderImage'
+import { readCachedData, writeCachedData, removeCachedData } from '../offlineCache'
 import PageHeader from '../components/PageHeader'
 import ConfirmDialog from '../components/ConfirmDialog'
 import PaymentGatewayModal from '../components/PaymentGatewayModal'
@@ -18,6 +20,7 @@ import { useDeliveryZones } from '../hooks/useDeliveryZones'
 import { usePaymentCheckout } from '../hooks/usePaymentCheckout'
 
 const KG_PRESETS = [5, 10, 12.5, 15]
+const ORDER_DRAFT_KEY = 'order-draft'
 const STEP_LABELS = ['Size', 'Cylinder', 'Address', 'Summary']
 
 // Keeps the student's profile image in sync whenever they attach an image on
@@ -38,7 +41,7 @@ function useEazyMarketTiers() {
   useEffect(() => {
     let cancelled = false
 
-    apiFetch('/eazy-market-delivery-tiers')
+    publicFetch('/eazy-market-delivery-tiers')
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => {
         if (!cancelled) setTiers(Array.isArray(data) ? data : [])
@@ -94,23 +97,50 @@ function CreateOrder({ token }) {
   const eazyMarketTiers = useEazyMarketTiers()
   const { startPayment: startGatewayPayment, pickerOpen, pickerBusy, chooseGateway, cancelPicker } = usePaymentCheckout(token)
 
-  const [step, setStep] = useState(0)
-  const [kg, setKg] = useState('')
-  const [customKg, setCustomKg] = useState(false)
-  const [locationType, setLocationType] = useState('hostel')
-  const [hostelName, setHostelName] = useState('')
-  const [roomDetails, setRoomDetails] = useState('')
-  const [offCampusAddress, setOffCampusAddress] = useState('')
-  const [deliveryZoneId, setDeliveryZoneId] = useState('')
+  // The shared /user context (see UserProvider) only fetches once per
+  // login and otherwise waits for something to explicitly call refresh() —
+  // but loyalty/referral standing can change from someone ELSE's action
+  // (a referred student's qualifying order/subscription), which this
+  // browser has no way to know about. Force a fresh copy whenever this page
+  // is opened, since it's read live below and can be spent on this order.
+  useEffect(() => {
+    refreshUser?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // What the student had typed last time (saved on every change below), so a
+  // dropped connection, a reload or a killed tab on a weak network doesn't
+  // make them re-enter the order. The cylinder photo is a File and can't be
+  // stored, so it's the one thing they may need to re-pick. Cleared as soon
+  // as the order is created. A guest's login hand-off draft (restored in an
+  // effect further down) still wins over this.
+  const [draft] = useState(() => readCachedData(ORDER_DRAFT_KEY, '') || {})
+  const draftClearedRef = useRef(false)
+
+  const [step, setStep] = useState(Math.min(Number(draft.step) || 0, 2))
+  const [kg, setKg] = useState(draft.kg ?? '')
+  const [customKg, setCustomKg] = useState(Boolean(draft.customKg))
+  const [locationType, setLocationType] = useState(draft.locationType || 'hostel')
+  const [hostelName, setHostelName] = useState(draft.hostelName || '')
+  const [roomDetails, setRoomDetails] = useState(draft.roomDetails || '')
+  const [offCampusAddress, setOffCampusAddress] = useState(draft.offCampusAddress || '')
+  const [deliveryZoneId, setDeliveryZoneId] = useState(draft.deliveryZoneId || '')
   const [cylinderImage, setCylinderImage] = useState(null)
   const [existingImageUrl, setExistingImageUrl] = useState(null)
-  const [forSomeoneElse, setForSomeoneElse] = useState(false)
+  const [forSomeoneElse, setForSomeoneElse] = useState(Boolean(draft.forSomeoneElse))
   const [pricePerKg, setPricePerKg] = useState(null)
   const [deliveryFeeHostel, setDeliveryFeeHostel] = useState(0)
   const [offer, setOffer] = useState(null)
   const [loyalty, setLoyalty] = useState(null)
   const [error, setError] = useState('')
   const [needsProfileImage, setNeedsProfileImage] = useState(false)
+  // Set when the backend blocks this submission because an order is already
+  // sitting unpaid (see OrderController::store) — a student only ever has
+  // one gas order in flight. `duplicateExactMatch` says whether it's the
+  // exact same kg/address/photo (just go pay it) or different (offer to
+  // update that order to today's form values instead of creating another).
+  const [duplicateOrder, setDuplicateOrder] = useState(null)
+  const [duplicateExactMatch, setDuplicateExactMatch] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [addToDeliveryOpen, setAddToDeliveryOpen] = useState(false)
@@ -133,7 +163,7 @@ function CreateOrder({ token }) {
   const guestDraftRestoredRef = useRef(false)
 
   useEffect(() => {
-    apiFetch('/price')
+    publicFetch('/price')
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data?.delivery_fee !== undefined && data?.delivery_fee !== null) setDeliveryFeeHostel(Number(data.delivery_fee))
@@ -172,7 +202,7 @@ function CreateOrder({ token }) {
     // A restored guest draft already carries the address the student typed
     // before logging in — don't overwrite it with whatever was saved on the
     // profile. The photo/referral seeding below is still wanted either way.
-    if (!guestDraftRestoredRef.current) {
+    if (!guestDraftRestoredRef.current && !draft.hostelName && !draft.offCampusAddress) {
       const type = user.location_type || 'hostel'
       setLocationType(type)
       if (user.hostel) {
@@ -182,7 +212,20 @@ function CreateOrder({ token }) {
     }
     if (user.cylinder_image_url) setExistingImageUrl(user.cylinder_image_url)
     /* eslint-enable react-hooks/set-state-in-effect */
-  }, [user])
+  }, [user, draft.hostelName, draft.offCampusAddress])
+
+  // Zones load asynchronously and have no natural "blank" state the way an
+  // address field does — same reasoning as defaulting the cylinder image to
+  // whatever's already on file, just pre-pick the first zone so the field
+  // never sits empty, rather than making every off-campus student choose
+  // one before they can even see a total. Only fires while nothing's
+  // selected yet, so it never overwrites a restored guest draft or the
+  // student's own later choice.
+  useEffect(() => {
+    if (deliveryZoneId || deliveryZones.length === 0) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setDeliveryZoneId(String(deliveryZones[0].id))
+  }, [deliveryZones, deliveryZoneId])
 
   // Loyalty standing and the referral percent balance are read LIVE from
   // the shared /user fetch (not copied into local state like the form
@@ -192,6 +235,17 @@ function CreateOrder({ token }) {
   // fresh across a second order placed without leaving this page.
   const loyaltyProgressKg = Number(user?.loyalty_progress_kg || 0)
   const referralPercentAvailable = Number(user?.referral_discount_percent_available || 0)
+  // A kg credit (not a percent/currency balance) earned from referrals hitting
+  // the ambassador milestone — see User::referral_free_kg_balance. Spent
+  // automatically here, same as loyalty/referral above: up to this order's
+  // own kg, whatever's left over stays on the balance for next time.
+  const referralFreeKgBalance = Number(user?.referral_free_kg_balance || 0)
+  // The monthly spend cap — separate from the lifetime balance above. Mirrors
+  // User::referralFreeKgMonthRemaining exactly (see OrderController::
+  // referralFreeKgDiscount, the authoritative version this is meant to
+  // preview). Once this hits 0 for the month, no free kg is actually
+  // applicable even if the balance itself is still positive.
+  const referralFreeKgMonthRemaining = Number(user?.referral_free_kg_month_remaining ?? referralFreeKgBalance)
   const loyaltyRewardAvailable = Boolean(user?.loyalty_reward_available)
   const loyaltyKgToNextReward =
     user?.loyalty_kg_to_next_reward !== null && user?.loyalty_kg_to_next_reward !== undefined
@@ -254,6 +308,12 @@ function CreateOrder({ token }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token])
 
+  useEffect(() => {
+    if (draftClearedRef.current) return
+    if (!kg && !hostelName && !offCampusAddress && !roomDetails) return
+    writeCachedData(ORDER_DRAFT_KEY, '', { step, kg, customKg, locationType, hostelName, roomDetails, offCampusAddress, deliveryZoneId, forSomeoneElse })
+  }, [step, kg, customKg, locationType, hostelName, roomDetails, offCampusAddress, deliveryZoneId, forSomeoneElse])
+
   const imagePreview = useMemo(() => (cylinderImage ? URL.createObjectURL(cylinderImage) : null), [cylinderImage])
 
   useEffect(() => {
@@ -287,15 +347,39 @@ function CreateOrder({ token }) {
   const loyaltyDiscount = loyalty && pricePerKg !== null && loyaltyDiscountableKg > 0
     ? pricePerKg * loyaltyDiscountableKg * (loyalty.discountPercent / 100)
     : 0
-  // Applied to whatever's still owed on the gas cost AFTER the loyalty
-  // discount above — loyalty goes first, referral only discounts what's
-  // left. referralPercentAvailable is a running PERCENT balance (not a
-  // coupon count — see User::grantReferralReward), so it can be over 100%
-  // (e.g. 140% from two referrals at 70% each); this one order only ever
-  // spends up to 100 percentage points of it, and whatever's left (e.g.
-  // that other 40%) stays on the balance for a future order. Mirrors
-  // OrderController::store. Also skipped for VVIP, same reasoning as loyalty.
-  const remainingAfterLoyalty = gasCost !== null ? Math.max(gasCost - loyaltyDiscount, 0) : null
+  // Spent right after loyalty and before the referral percent below — mirrors
+  // OrderController::referralFreeKgDiscount exactly: covers at most this
+  // order's own kg, never more than the balance holds, and never more than
+  // what's left of the monthly spend cap — once that cap is used up this
+  // month, freeKgUsed is 0 even if the lifetime balance is still positive,
+  // matching exactly what the backend will actually apply at checkout. Also
+  // skipped for VVIP, same reasoning as loyalty (nothing left to discount on
+  // a free order).
+  const freeKgUsed = !getsFreeGas && kgValid && referralFreeKgBalance > 0 && referralFreeKgMonthRemaining > 0
+    ? Math.min(referralFreeKgBalance, kgValue, referralFreeKgMonthRemaining)
+    : 0
+  // What the banner below should actually promise — the balance capped by
+  // what's left of this month's spend cap, so it never advertises more than
+  // the backend will actually apply. 0 once the monthly cap is used up,
+  // even if the lifetime balance is still positive — the banner then hides
+  // entirely (see the condition below).
+  const freeKgAvailableThisMonth = !getsFreeGas
+    ? Math.min(referralFreeKgBalance, referralFreeKgMonthRemaining)
+    : 0
+  const freeKgDiscount = freeKgUsed > 0 && pricePerKg !== null ? pricePerKg * freeKgUsed : 0
+  // What's left on the free-kg balance once this order spends its share —
+  // shown so the student can see it carries over rather than vanishing.
+  const freeKgRemaining = Math.round((referralFreeKgBalance - freeKgUsed) * 100) / 100
+  // Applied to whatever's still owed on the gas cost AFTER loyalty AND the
+  // free-kg credit above — loyalty goes first, then free kg, then referral
+  // percent only discounts what's left of those two. referralPercentAvailable
+  // is a running PERCENT balance (not a coupon count — see
+  // User::grantReferralReward), so it can be over 100% (e.g. 140% from two
+  // referrals at 70% each); this one order only ever spends up to 100
+  // percentage points of it, and whatever's left (e.g. that other 40%) stays
+  // on the balance for a future order. Mirrors OrderController::store. Also
+  // skipped for VVIP, same reasoning as loyalty.
+  const remainingAfterLoyalty = gasCost !== null ? Math.max(gasCost - loyaltyDiscount - freeKgDiscount, 0) : null
   const referralPercentUsed = getsFreeGas || !remainingAfterLoyalty
     ? 0
     : Math.min(referralPercentAvailable, 100)
@@ -325,7 +409,7 @@ function CreateOrder({ token }) {
     return tier ? Number(tier.fee) : 0
   }, [eazyMarketTiers, cartEazyMarketSubtotal, getsFreeShopDelivery])
   const shopChargeNow = bundlingFreshCart ? cart.subtotal + cartEazyMarketFee : 0
-  const total = gasCost !== null ? Math.max(gasCost - loyaltyDiscount - referralDiscount - vvipDiscount, 0) + deliveryFee + shopChargeNow : null
+  const total = gasCost !== null ? Math.max(gasCost - loyaltyDiscount - freeKgDiscount - referralDiscount - vvipDiscount, 0) + deliveryFee + shopChargeNow : null
   // Ordering for someone else means their cylinder photo shouldn't stand in
   // for — or overwrite — the requester's own saved default.
   const usableExistingImageUrl = forSomeoneElse ? null : existingImageUrl
@@ -416,7 +500,7 @@ function CreateOrder({ token }) {
     return data.id
   }
 
-  const submitOrder = async (imageFile, { syncProfile = true } = {}) => {
+  const submitOrder = async (imageFile, { syncProfile = true, forceCreate = false } = {}) => {
     if (imageFile && syncProfile) {
       await syncProfileImage(token, imageFile)
     }
@@ -445,6 +529,11 @@ function CreateOrder({ token }) {
     if (imageFile) {
       formData.append('cylinder_image', imageFile)
     }
+    // Set only when the student explicitly chose "create this order anyway"
+    // from the already-have-one-pending prompt below — see the 409 case.
+    if (forceCreate) {
+      formData.append('force_create', '1')
+    }
 
     const response = await apiFetch('/orders', { method: 'POST', token, body: formData })
     const data = await response.json().catch(() => null)
@@ -455,10 +544,21 @@ function CreateOrder({ token }) {
       return null
     }
 
+    if (response.status === 409) {
+      setError(data?.message || 'You already have an order awaiting payment.')
+      setDuplicateOrder(data?.existing_order ?? null)
+      setDuplicateExactMatch(Boolean(data?.exact_match))
+      return null
+    }
+
     if (!response.ok) {
       setError(data?.message || 'Could not create the order.')
       return null
     }
+
+    // The order exists server-side now — the saved form draft has done its job.
+    draftClearedRef.current = true
+    removeCachedData(ORDER_DRAFT_KEY, '')
 
     // Cart clears once the order exists server-side, not once payment is
     // confirmed — matches this page's existing behavior (an order can
@@ -490,6 +590,29 @@ function CreateOrder({ token }) {
     return data
   }
 
+  // Reached from the "you already have one pending" prompt below (see the
+  // 409 case in submitOrder) when the student chooses to go ahead anyway —
+  // resubmits with force_create so the backend skips the pending-order
+  // check this time, then pays for the freshly created order. Editing the
+  // existing pending order instead happens on its own tracking page
+  // (OrderDetail.jsx), not here.
+  const handleCreateAnyway = async () => {
+    setError('')
+    setDuplicateOrder(null)
+    setDuplicateExactMatch(false)
+    setSubmitting(true)
+
+    try {
+      const order = await submitOrder(cylinderImage, { syncProfile: !forSomeoneElse, forceCreate: true })
+      if (!order) return
+      await startPayment(order)
+    } catch {
+      setError('Check your internet connection.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   const startPayment = async (order) => {
     const { ok, data: payData, gateway, cancelled } = await startGatewayPayment('order', order.id)
 
@@ -516,6 +639,8 @@ function CreateOrder({ token }) {
     setConfirmOpen(false)
     setError('')
     setNeedsProfileImage(false)
+    setDuplicateOrder(null)
+    setDuplicateExactMatch(false)
     setSubmitting(true)
 
     try {
@@ -523,7 +648,7 @@ function CreateOrder({ token }) {
       if (!order) return
       await startPayment(order)
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setSubmitting(false)
     }
@@ -534,6 +659,8 @@ function CreateOrder({ token }) {
     if (!file) return
 
     setError('')
+    setDuplicateOrder(null)
+    setDuplicateExactMatch(false)
     setSubmitting(true)
 
     try {
@@ -541,7 +668,7 @@ function CreateOrder({ token }) {
       if (!order) return
       await startPayment(order)
     } catch {
-      setError('Could not reach the server.')
+      setError('Check your internet connection.')
     } finally {
       setSubmitting(false)
     }
@@ -568,6 +695,24 @@ function CreateOrder({ token }) {
   return (
     <div className="mx-auto max-w-2xl">
       <PageHeader title="Create Order" subtitle="Request a gas refill for delivery to your hostel." icon={PlusCircle} />
+
+      {!getsFreeGas && freeKgAvailableThisMonth > 0 && (
+        <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-brand-teal/20 bg-brand-teal/5 px-4 py-3 text-sm">
+          <Gift className="mt-0.5 h-4 w-4 flex-shrink-0 text-brand-teal" strokeWidth={2} />
+          <span>
+            <span className="font-medium text-brand-navy">Free gas credit from referrals</span> — you have{' '}
+            <strong>{freeKgAvailableThisMonth}kg</strong> available. It&apos;s applied to this order automatically at
+            checkout — if this order is {freeKgAvailableThisMonth}kg or more, {freeKgAvailableThisMonth}kg of it is free;
+            if it&apos;s less, only what you order is covered.
+            {kgValid && freeKgUsed > 0 && freeKgRemaining > 0 && (
+              <> The remaining {freeKgRemaining}kg carries over to your next order.</>
+            )}
+            {kgValid && freeKgUsed > 0 && freeKgRemaining === 0 && (
+              <> This order uses it up completely.</>
+            )}
+          </span>
+        </div>
+      )}
 
       {!getsFreeGas && referralPercentAvailable > 0 && (
         <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-brand-teal/20 bg-brand-teal/5 px-4 py-3 text-sm">
@@ -728,6 +873,12 @@ function CreateOrder({ token }) {
                     <span className="figure font-medium text-brand-teal">&minus;{formatNaira(loyaltyDiscount)}</span>
                   </div>
                 )}
+                {freeKgDiscount > 0 && (
+                  <div className="mt-1 flex items-center justify-between">
+                    <span className="text-brand-teal">Free gas credit ({freeKgUsed}kg)</span>
+                    <span className="figure font-medium text-brand-teal">&minus;{formatNaira(freeKgDiscount)}</span>
+                  </div>
+                )}
                 {vvipDiscount > 0 && (
                   <div className="mt-1 flex items-center justify-between">
                     <span className="text-brand-teal">VVIP discount — gas is free</span>
@@ -782,7 +933,7 @@ function CreateOrder({ token }) {
 
             {imagePreview || usableExistingImageUrl ? (
               <div className="relative overflow-hidden rounded-xl border border-slate-200">
-                <img src={imagePreview || resolveImageUrl(usableExistingImageUrl)} alt="Cylinder" className="h-48 w-full object-cover" />
+                <img src={imagePreview || resolveImageUrl(usableExistingImageUrl)} alt="Cylinder" width={640} height={192} loading="lazy" decoding="async" className="h-48 w-full object-cover" />
                 <div className="absolute inset-x-0 bottom-0 flex flex-wrap items-center justify-between gap-2 bg-black/55 px-3 py-2 backdrop-blur-sm">
                   <span className="text-xs text-white">
                     {imagePreview ? (forSomeoneElse ? "Someone else's photo" : 'New photo') : 'Using your saved photo'}
@@ -904,6 +1055,12 @@ function CreateOrder({ token }) {
                     <span className="figure font-medium text-brand-teal">&minus;{formatNaira(loyaltyDiscount)}</span>
                   </div>
                 )}
+                {freeKgDiscount > 0 && (
+                  <div className="mt-1 flex items-center justify-between">
+                    <span className="text-brand-teal">Free gas credit ({freeKgUsed}kg)</span>
+                    <span className="figure font-medium text-brand-teal">&minus;{formatNaira(freeKgDiscount)}</span>
+                  </div>
+                )}
                 {vvipDiscount > 0 && (
                   <div className="mt-1 flex items-center justify-between">
                     <span className="text-brand-teal">VVIP discount — gas is free</span>
@@ -943,7 +1100,7 @@ function CreateOrder({ token }) {
           <div className="flex flex-col gap-4">
             <div className="overflow-hidden rounded-xl border border-slate-200">
               {(imagePreview || usableExistingImageUrl) && (
-                <img src={imagePreview || resolveImageUrl(usableExistingImageUrl)} alt="Cylinder" className="h-32 w-full object-cover" />
+                <img src={imagePreview || resolveImageUrl(usableExistingImageUrl)} alt="Cylinder" width={640} height={128} loading="lazy" decoding="async" className="h-32 w-full object-cover" />
               )}
               {forSomeoneElse && (
                 <p className="bg-amber-50 px-4 py-2 text-xs font-medium text-amber-700">Not your saved cylinder — ordering on behalf of someone else</p>
@@ -965,6 +1122,12 @@ function CreateOrder({ token }) {
                   <div className="flex items-center justify-between">
                     <span className="text-brand-teal">Loyalty discount</span>
                     <span className="figure font-medium text-brand-teal">&minus;{formatNaira(loyaltyDiscount)}</span>
+                  </div>
+                )}
+                {freeKgDiscount > 0 && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-brand-teal">Free gas credit ({freeKgUsed}kg)</span>
+                    <span className="figure font-medium text-brand-teal">&minus;{formatNaira(freeKgDiscount)}</span>
                   </div>
                 )}
                 {vvipDiscount > 0 && (
@@ -1006,7 +1169,7 @@ function CreateOrder({ token }) {
 
             <p className="flex items-center gap-1.5 text-xs text-slate-400">
               <ShieldCheck className="h-3.5 w-3.5 flex-shrink-0" strokeWidth={1.8} />
-              You'll be redirected to Paystack to pay securely — nothing is charged until you confirm there.
+              You'll be redirected to our secure payment page to pay — nothing is charged until you confirm there.
             </p>
           </div>
         )}
@@ -1051,6 +1214,24 @@ function CreateOrder({ token }) {
               <div>
                 <label className="label-text text-red-700">Upload a cylinder image now to continue:</label>
                 <input type="file" accept="image/*" onChange={handleRecoveryFileChange} disabled={submitting} className="file-input" />
+              </div>
+            )}
+
+            {duplicateOrder && (
+              <div className="flex flex-col gap-3">
+                <p className="text-sm text-slate-600">
+                  {duplicateExactMatch
+                    ? "It's an exact match for an order you already have pending — edit and pay for it there, or go ahead and create this one anyway."
+                    : "Choose whether to edit and pay for your existing pending order instead, or create this one as a separate order."}
+                </p>
+                <div className="flex flex-wrap gap-3">
+                  <Link to={`/orders/${duplicateOrder.id}/edit`} className="btn-primary">
+                    Edit &amp; pay that order
+                  </Link>
+                  <button type="button" onClick={handleCreateAnyway} disabled={submitting} className="btn-outline">
+                    {submitting ? 'Creating…' : 'Create this order anyway'}
+                  </button>
+                </div>
               </div>
             )}
           </div>

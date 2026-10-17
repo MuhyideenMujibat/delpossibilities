@@ -15,6 +15,14 @@ class Product extends Model
         'eazy_market' => ['groceries', 'fresh_produce', 'frozen_foods', 'market_errands', 'peanuts'],
     ];
 
+    protected static function booted(): void
+    {
+        $bump = fn () => \App\Support\CatalogCache::bump();
+
+        static::saved($bump);
+        static::deleted($bump);
+    }
+
     protected $fillable = [
         'group',
         'category',

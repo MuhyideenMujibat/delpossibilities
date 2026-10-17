@@ -5,11 +5,18 @@ namespace App\Mail;
 use App\Models\Order;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Mail\Mailable;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Storage;
 
-class OrderReceiptMail extends Mailable
+// Queued (see Order::sendReceiptEmail) — this used to send synchronously
+// inline in the payment-confirmation request, and a slow/hanging SMTP
+// connection there had already fatal-errored a request past PHP's
+// execution-time limit in production (see the comments this replaced in
+// OrderController/PaystackWebhookController). Queueing means a slow send
+// delays the email, not the response the student is waiting on.
+class OrderReceiptMail extends Mailable implements ShouldQueue
 {
     use Queueable, SerializesModels;
 

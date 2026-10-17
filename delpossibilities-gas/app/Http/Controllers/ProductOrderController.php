@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Product;
 use App\Models\ProductOrder;
 use App\Models\ProductVariant;
+use App\Models\Setting;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -188,7 +189,17 @@ class ProductOrderController extends Controller
             ]);
         }
 
-        if ($productOrder->paystack_reference && $productOrder->payment_authorization_url) {
+        // Honour the admin's gateway toggle, same as gas orders and
+        // subscriptions (OrderController::pay) — checked BEFORE reusing a
+        // previously started Paystack link so a switched-off gateway can't be
+        // resumed either.
+        if (! Setting::current()->paystack_enabled) {
+            return response()->json([
+                'message' => 'Paystack is not currently available. Please choose another payment option.',
+            ], 422);
+        }
+
+        if ($productOrder->paystack_reference && $productOrder->payment_authorization_url && $productOrder->payment_gateway !== 'flutterwave') {
             return response()->json([
                 'authorization_url' => $productOrder->payment_authorization_url,
                 'reference' => $productOrder->paystack_reference,
@@ -198,7 +209,7 @@ class ProductOrderController extends Controller
         $reference = 'product_order_'.$productOrder->id.'_'.Str::random(10);
 
         try {
-            $response = Http::withToken(config('services.paystack.secret_key'))
+            $response = Http::withToken(config('services.paystack.secret_key'))->timeout(10)
                 ->post('https://api.paystack.co/transaction/initialize', [
                     'email' => $user->email,
                     'amount' => (int) ($productOrder->total_amount * 100),
@@ -226,6 +237,7 @@ class ProductOrderController extends Controller
 
         $productOrder->update([
             'paystack_reference' => $reference,
+            'payment_gateway' => 'paystack',
             'payment_authorization_url' => $response->json('data.authorization_url'),
         ]);
 
@@ -254,7 +266,7 @@ class ProductOrderController extends Controller
         }
 
         try {
-            $response = Http::withToken(config('services.paystack.secret_key'))
+            $response = Http::withToken(config('services.paystack.secret_key'))->timeout(10)
                 ->get('https://api.paystack.co/transaction/verify/'.$productOrder->paystack_reference);
         } catch (\Illuminate\Http\Client\ConnectionException $e) {
             Log::error('Paystack verify connection error: '.$e->getMessage());
@@ -280,7 +292,15 @@ class ProductOrderController extends Controller
         $expectedAmountInKobo = (int) ($productOrder->total_amount * 100);
 
         if ($paystackStatus === 'success' && $amountPaidInKobo === $expectedAmountInKobo) {
-            $productOrder->update(['status' => 'approved', 'paid_at' => now()]);
+            // Locked and re-checked — this can race the Paystack webhook's
+            // handleProductOrderPayment hitting the same standalone cart.
+            DB::transaction(function () use ($productOrder) {
+                $locked = ProductOrder::whereKey($productOrder->id)->lockForUpdate()->first();
+
+                if ($locked->status === 'pending') {
+                    $locked->update(['status' => 'approved', 'paid_at' => now()]);
+                }
+            });
         } elseif ($paystackStatus === 'success') {
             Log::warning('Paystack verify amount mismatch', [
                 'product_order_id' => $productOrder->id,

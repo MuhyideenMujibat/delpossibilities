@@ -6,6 +6,14 @@ use Illuminate\Database\Eloquent\Model;
 
 class SubscriptionPlan extends Model
 {
+    protected static function booted(): void
+    {
+        $bump = fn () => \App\Support\CatalogCache::bump();
+
+        static::saved($bump);
+        static::deleted($bump);
+    }
+
     protected $fillable = [
         'package_type',
         'tier',
